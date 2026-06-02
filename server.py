@@ -12,14 +12,19 @@ class Server:
         self.global_model.load_state_dict(weights)
         self.global_model.to(self.device)
 
-    def evaluate(self, test_loader):
+    def evaluate(self, test_loader, device):
+        self.global_model.to(device)
         self.global_model.eval()
+
         correct, total = 0, 0
 
         with torch.no_grad():
             for x, y in test_loader:
+                x, y = x.to(device), y.to(device)
+
                 out = self.global_model(x)
                 pred = out.argmax(dim=1)
+
                 correct += (pred == y).sum().item()
                 total += y.size(0)
 

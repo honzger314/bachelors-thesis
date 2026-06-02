@@ -90,7 +90,7 @@ def main():
     shards = iid_split(train, num_clients=agents)
 
     clients = [
-        Client(i, shards[i], CNN)
+        Client(i, shards[i], CNN, device=device)
         for i in range(agents)
     ]
 
@@ -114,7 +114,7 @@ def main():
         global_model.load_state_dict(new_weights)
         server.set_weights(new_weights)
 
-        acc = server.evaluate(test_loader)
+        acc = server.evaluate(test_loader, device)
 
         print("Accuracy:", acc)
         print("Weights:", fedavg_weights)
