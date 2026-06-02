@@ -94,11 +94,11 @@ def main():
         for i in range(agents)
     ]
 
-    server = Server(clients)
+    server = Server(clients, device)
 
     global_model = CNN().to(device)
 
-    rounds = 15
+    rounds = 5
 
     for r in range(rounds):
         print(f"\n--- Round {r} ---")
@@ -109,10 +109,7 @@ def main():
             update = c.train(global_model)
             client_updates.append(update)
 
-        new_weights, shapley_weights = server.shapley_aggregate(
-            client_updates,
-            eval_fn
-        )
+        new_weights, fedavg_weights = server.fedavg(client_updates)
 
         global_model.load_state_dict(new_weights)
         server.set_weights(new_weights)
@@ -120,7 +117,7 @@ def main():
         acc = server.evaluate(test_loader)
 
         print("Accuracy:", acc)
-        print("Shapley weights:", shapley_weights)
+        print("Weights:", fedavg_weights)
 
 
 if __name__ == "__main__":
