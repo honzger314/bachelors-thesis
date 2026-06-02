@@ -1,12 +1,29 @@
 import torch
+import copy
+import random
+import numpy as np
 from torchvision import datasets, transforms
 from client import Client
 from server import Server
 from model import CNN
+from incentives import IncentiveTracker
 
 # ------------------------
 # DATA (IID CIFAR-10)
 # ------------------------
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # makes results more reproducible (slower but stable)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+set_seed(42)
+
 def load_data():
     transform = transforms.Compose([
         transforms.ToTensor()
@@ -63,6 +80,8 @@ def main():
         shuffle=False
     )
 
+    tracker = IncentiveTracker(num_clients=agents)
+
     # move evaluation model to device via closure
     def make_eval(test_loader):
         def eval_fn(model):
@@ -98,10 +117,12 @@ def main():
 
     global_model = CNN().to(device)
 
-    rounds = 5
+    rounds = 20
 
     for r in range(rounds):
         print(f"\n--- Round {r} ---")
+
+        old_weights = copy.deepcopy(global_model.state_dict())
 
         client_updates = []
 
@@ -113,6 +134,16 @@ def main():
 
         global_model.load_state_dict(new_weights)
         server.set_weights(new_weights)
+
+        global_delta = {
+            k: new_weights[k] - old_weights[k]
+            for k in old_weights
+        }
+
+        round_scores = tracker.update(client_updates, global_delta)
+
+        print("Incentive scores:", round_scores)
+        print("Ranking:", tracker.ranking())
 
         acc = server.evaluate(test_loader, device)
 
