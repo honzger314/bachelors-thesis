@@ -7,6 +7,7 @@ from client import Client
 from server import Server
 from model import CNN
 from incentives import IncentiveTracker
+from partitioning import dirichlet_split
 
 # ------------------------
 # DATA (IID CIFAR-10)
@@ -106,7 +107,12 @@ def main():
 
     eval_fn = make_eval(test_loader)
 
-    shards = iid_split(train, num_clients=agents)
+    shards = dirichlet_split(
+        train,
+        num_clients=agents,
+        alpha=0.5,
+        seed=42
+    )
 
     clients = [
         Client(i, shards[i], CNN, device=device)
