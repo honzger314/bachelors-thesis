@@ -45,3 +45,32 @@ class Server:
             )
 
         return new_state, weights
+    
+    def loo_evaluate(self, client_updates, test_fn):
+        """
+        Returns per-client LOO contribution scores.
+        """
+
+        n = len(client_updates)
+
+        full_model, _ = self.fedavg(client_updates)
+        full_acc = test_fn(full_model)
+
+        loo_scores = []
+
+        for i in range(n):
+
+            subset = [
+                client_updates[j]
+                for j in range(n)
+                if j != i
+            ]
+
+            loo_model, _ = self.fedavg(subset)
+            loo_acc = test_fn(loo_model)
+
+            # marginal contribution
+            contribution = full_acc - loo_acc
+            loo_scores.append(contribution)
+
+        return full_acc, loo_scores
