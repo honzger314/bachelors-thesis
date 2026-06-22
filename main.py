@@ -4,6 +4,7 @@ import random
 import numpy as np
 
 from torchvision import datasets, transforms
+from torch.utils.data import random_split
 
 from client import Client
 from server import Server
@@ -14,7 +15,7 @@ from partitioning import dirichlet_split
 
 
 # ------------------------
-# SEEDING
+# SEED
 # ------------------------
 def set_seed(seed=42):
     random.seed(seed)
@@ -26,18 +27,15 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False
 
 
-set_seed(42)
-
-
 # ------------------------
 # DATA
 # ------------------------
-def load_data():
+def load_data(val_ratio=0.1):
     transform = transforms.Compose([
         transforms.ToTensor()
     ])
 
-    train = datasets.CIFAR10(
+    full_train = datasets.CIFAR10(
         root="./data",
         train=True,
         download=True,
@@ -51,57 +49,78 @@ def load_data():
         transform=transform
     )
 
-    return train, test
+    # ------------------------
+    # split train → train + val
+    # ------------------------
+    val_size = int(len(full_train) * val_ratio)
+    train_size = len(full_train) - val_size
 
+    train, val = random_split(
+        full_train,
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(42)
+    )
 
-agents = 10
-
+    return train, val, test
 
 # ------------------------
-# MAIN
+# CORE EXPERIMENT FUNCTION
 # ------------------------
-def main():
+def run_experiment(
+    agents=10,
+    alpha=0.5,
+    rounds=20,
+    seed=42,
+    device=None,
+    return_history=True
+):
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    set_seed(seed)
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     print("Using device:", device)
 
-    train, test = load_data()
+    train, val, test = load_data()
 
     test_loader = torch.utils.data.DataLoader(
         test,
         batch_size=64,
         shuffle=False
     )
+    
+    val_loader = torch.utils.data.DataLoader(
+        val,
+        batch_size=64,
+        shuffle=False
+    )
 
     # ------------------------
-    # Partitioning (NON-IID)
+    # Partition
     # ------------------------
     shards = dirichlet_split(
         train,
         num_clients=agents,
-        alpha=0.5,   # FIXED (was 0 → invalid)
-        seed=42
+        alpha=alpha,
+        seed=seed
     )
 
     # ------------------------
-    # Clients
+    # Setup
     # ------------------------
     clients = [
         Client(i, shards[i], CNN, device=device)
         for i in range(agents)
     ]
 
-    # ------------------------
-    # Server
-    # ------------------------
     server = Server(clients, device)
 
     global_model = CNN().to(device)
 
     tracker = IncentiveTracker(num_clients=agents)
 
-    rounds = 20
-
+    history = []
 
     # ------------------------
     # TRAIN LOOP
@@ -113,54 +132,59 @@ def main():
 
         client_updates = []
 
-        # ------------------------
-        # Client training
-        # ------------------------
         for c in clients:
-            update = c.train(global_model)
+            update = c.train(global_model.to(device))
             client_updates.append(update)
 
-        # ------------------------
         # FedAvg
-        # ------------------------
         new_weights, fedavg_weights = server.fedavg(client_updates)
 
         global_model.load_state_dict(new_weights)
         server.set_weights(new_weights)
 
-        # ------------------------
-        # LOO evaluation
-        # ------------------------
+        # LOO
         full_acc, loo_scores = server.loo_evaluate(
             client_updates,
-            lambda m: server.evaluate_model(m, test_loader, device)
+            lambda m: server.evaluate_model(m, val_loader, device)
         )
 
-        # ------------------------
-        # Global delta
-        # ------------------------
         global_delta = {
             k: new_weights[k] - old_weights[k]
             for k in old_weights
         }
 
-        # ------------------------
         # Incentives
-        # ------------------------
         round_scores = tracker.update(client_updates, global_delta)
 
-        print("Incentive scores:", round_scores)
-        print("Ranking:", tracker.ranking())
-
-        # ------------------------
-        # Final evaluation
-        # ------------------------
         acc = server.evaluate(test_loader, device)
 
         print("Accuracy:", acc)
-        print("FedAvg weights:", fedavg_weights)
-        print("LOO scores:", loo_scores)
+
+        record = {
+            "round": r,
+            "accuracy": acc,
+            "incentives": round_scores,
+            "ranking": tracker.ranking(),
+            "loo": loo_scores
+        }
+
+        history.append(record)
+
+    # ------------------------
+    # OUTPUT
+    # ------------------------
+    result = {
+        "final_accuracy": history[-1]["accuracy"],
+        "final_ranking": history[-1]["ranking"],
+        "history": history
+    }
+
+    if return_history:
+        return result, history
+
+    return result
 
 
+# optional local run
 if __name__ == "__main__":
-    main()
+    run_experiment()
