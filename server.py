@@ -29,6 +29,24 @@ class Server:
                 total += y.size(0)
 
         return correct / total
+
+    def evaluate_model(self, model, test_loader, device):
+        model.to(device)
+        model.eval()
+
+        correct, total = 0, 0
+
+        with torch.no_grad():
+            for x, y in test_loader:
+                x, y = x.to(device), y.to(device)
+
+                out = model(x)
+                pred = out.argmax(dim=1)
+
+                correct += (pred == y).sum().item()
+                total += y.size(0)
+
+        return correct / total
     
     def fedavg(self, client_updates):
         n = len(client_updates)
@@ -53,7 +71,11 @@ class Server:
 
         n = len(client_updates)
 
-        full_model, _ = self.fedavg(client_updates)
+        full_state, _ = self.fedavg(client_updates)
+
+        full_model = CNN().to(self.device)
+        full_model.load_state_dict(full_state)
+
         full_acc = test_fn(full_model)
 
         loo_scores = []
@@ -66,7 +88,11 @@ class Server:
                 if j != i
             ]
 
-            loo_model, _ = self.fedavg(subset)
+            loo_state, _ = self.fedavg(subset)
+
+            loo_model = CNN().to(self.device)
+            loo_model.load_state_dict(loo_state)
+
             loo_acc = test_fn(loo_model)
 
             # marginal contribution
