@@ -38,14 +38,14 @@ def load_data(val_ratio=0.1):
     full_train = datasets.CIFAR10(
         root="./data",
         train=True,
-        download=True,
+        download=False,
         transform=transform
     )
 
     test = datasets.CIFAR10(
         root="./data",
         train=False,
-        download=True,
+        download=False,
         transform=transform
     )
 
