@@ -30,7 +30,7 @@ def set_seed(seed=42):
 # ------------------------
 # DATA
 # ------------------------
-def load_data(val_ratio=0.1):
+def load_data(seed, val_ratio=0.1):
     transform = transforms.Compose([
         transforms.ToTensor()
     ])
@@ -58,7 +58,7 @@ def load_data(val_ratio=0.1):
     train, val = random_split(
         full_train,
         [train_size, val_size],
-        generator=torch.Generator().manual_seed(42)
+        generator=torch.Generator().manual_seed(seed)
     )
 
     return train, val, test
@@ -82,7 +82,7 @@ def run_experiment(
 
     print("Using device:", device)
 
-    train, val, test = load_data()
+    train, val, test = load_data(seed)
 
     test_loader = torch.utils.data.DataLoader(
         test,

@@ -8,11 +8,11 @@ from main import run_experiment
 # ------------------------
 # GRID SETTINGS
 # ------------------------
-SEEDS = [1]
-#SEEDS = [1, 2, 3, 4, 5]
+#SEEDS = [1]
+SEEDS = [1, 2, 3, 4, 5]
 
-ALPHAS = [0.1]
-#ALPHAS = [0.1, 0.5, 1.0, 5.0, 10.0]
+#ALPHAS = [0.1]
+ALPHAS = [0.1, 0.5, 1.0, 5.0, 10.0]
 
 AGENTS = 10
 ROUNDS = 20
