@@ -1,7 +1,7 @@
 import torch
-import copy
 import random
 import numpy as np
+import copy
 
 from torchvision import datasets, transforms
 from torch.utils.data import random_split
@@ -9,10 +9,8 @@ from torch.utils.data import random_split
 from client import Client
 from server import Server
 from model import CNN
-
-from incentives import IncentiveTracker
 from partitioning import dirichlet_split
-
+from telemetery import TelemetryCollector
 
 # ------------------------
 # SEED
@@ -49,9 +47,6 @@ def load_data(seed, val_ratio=0.1):
         transform=transform
     )
 
-    # ------------------------
-    # split train → train + val
-    # ------------------------
     val_size = int(len(full_train) * val_ratio)
     train_size = len(full_train) - val_size
 
@@ -63,8 +58,9 @@ def load_data(seed, val_ratio=0.1):
 
     return train, val, test
 
+
 # ------------------------
-# CORE EXPERIMENT FUNCTION
+# CORE EXPERIMENT
 # ------------------------
 def run_experiment(
     agents=10,
@@ -84,21 +80,9 @@ def run_experiment(
 
     train, val, test = load_data(seed)
 
-    test_loader = torch.utils.data.DataLoader(
-        test,
-        batch_size=64,
-        shuffle=False
-    )
-    
-    val_loader = torch.utils.data.DataLoader(
-        val,
-        batch_size=64,
-        shuffle=False
-    )
+    test_loader = torch.utils.data.DataLoader(test, batch_size=64, shuffle=False)
+    val_loader = torch.utils.data.DataLoader(val, batch_size=64, shuffle=False)
 
-    # ------------------------
-    # Partition
-    # ------------------------
     shards = dirichlet_split(
         train,
         num_clients=agents,
@@ -106,19 +90,15 @@ def run_experiment(
         seed=seed
     )
 
-    # ------------------------
-    # Setup
-    # ------------------------
     clients = [
         Client(i, shards[i], CNN, device=device)
         for i in range(agents)
     ]
 
     server = Server(clients, device)
-
     global_model = CNN().to(device)
 
-    tracker = IncentiveTracker(num_clients=agents)
+    telemetry = TelemetryCollector()
 
     history = []
 
@@ -133,11 +113,15 @@ def run_experiment(
         client_updates = []
 
         for c in clients:
-            update = c.train(global_model.to(device))
-            client_updates.append(update)
+            state, update, grad = c.train(global_model)
+            client_updates.append((state, update, grad))
+
+        # split tuples
+        client_states = [c[0] for c in client_updates]
+        client_grads = [c[2] for c in client_updates]
 
         # FedAvg
-        new_weights, fedavg_weights = server.fedavg(client_updates)
+        new_weights, _ = server.fedavg(client_updates)
 
         global_model.load_state_dict(new_weights)
         server.set_weights(new_weights)
@@ -148,35 +132,35 @@ def run_experiment(
             lambda m: server.evaluate_model(m, val_loader, device)
         )
 
-        global_delta = {
-            k: new_weights[k] - old_weights[k]
-            for k in old_weights
-        }
-
-        # Incentives
-        round_scores = tracker.update(client_updates, global_delta)
-
         acc = server.evaluate(test_loader, device)
+
+        # ------------------------
+        # TELEMETRY LOGGING
+        # ------------------------
+        telemetry.log_round(
+            round_id=r,
+            global_model=global_model,
+            client_updates=client_states,
+            client_grads=client_grads,
+            client_losses_before=None,
+            client_losses_after=None,
+            test_loss=None,
+            test_acc=acc,
+            loo_scores=loo_scores
+        )
 
         print("Accuracy:", acc)
 
-        record = {
+        history.append({
             "round": r,
             "accuracy": acc,
-            "incentives": round_scores,
-            "ranking": tracker.ranking(),
             "loo": loo_scores
-        }
+        })
 
-        history.append(record)
-
-    # ------------------------
-    # OUTPUT
-    # ------------------------
     result = {
         "final_accuracy": history[-1]["accuracy"],
-        "final_ranking": history[-1]["ranking"],
-        "history": history
+        "history": history,
+        "telemetry": telemetry.export()
     }
 
     if return_history:
@@ -185,6 +169,6 @@ def run_experiment(
     return result
 
 
-# optional local run
+# optional run
 if __name__ == "__main__":
     run_experiment()

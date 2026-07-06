@@ -48,17 +48,23 @@ class Server:
 
         return correct / total
     
-    def fedavg(self, client_updates):
-        n = len(client_updates)
+    def extract_updates(self, client_outputs):
+        return [c[1] for c in client_outputs]
 
+    def extract_grads(self, client_outputs):
+        return [c[2] for c in client_outputs]
+    
+    def fedavg(self, client_outputs):
+        n = len(client_outputs)
         weights = [1.0 / n for _ in range(n)]
 
-        # create empty copy of model structure (safer than copying weights)
+        client_states = [c[0] for c in client_outputs]  # state_dict only
+
         new_state = copy.deepcopy(self.global_model.state_dict())
 
         for key in new_state.keys():
             new_state[key] = sum(
-                weights[i] * client_updates[i][key]
+                weights[i] * client_states[i][key]
                 for i in range(n)
             )
 

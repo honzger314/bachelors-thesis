@@ -12,11 +12,18 @@ class Client:
         self.device = device
 
     def train(self, global_model, epochs=1):
+        import torch
+        import copy
+
         model = copy.deepcopy(global_model).to(self.device)
         model.train()
 
         optimizer = torch.optim.SGD(model.parameters(), lr=self.lr)
         loss_fn = torch.nn.CrossEntropyLoss()
+
+        initial_params = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+        last_grads = None  # we will store last batch gradients
 
         for _ in range(epochs):
             for x, y in self.loader:
@@ -26,6 +33,23 @@ class Client:
                 out = model(x)
                 loss = loss_fn(out, y)
                 loss.backward()
+
+                # capture gradients (flattened once per batch)
+                grads = []
+                for p in model.parameters():
+                    if p.grad is not None:
+                        grads.append(p.grad.detach().clone().cpu())
+
+                last_grads = torch.cat([g.flatten() for g in grads])
+
                 optimizer.step()
 
-        return model.state_dict()
+        final_params = model.state_dict()
+
+        # compute update (FedAvg-style delta)
+        update_vec = torch.cat([
+            (final_params[k] - initial_params[k]).flatten().cpu()
+            for k in final_params
+        ])
+
+        return final_params, update_vec, last_grads
