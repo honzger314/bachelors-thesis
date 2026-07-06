@@ -1,33 +1,29 @@
 import os
 import json
-from datetime import datetime
 
 from main import run_experiment
-
 
 # ------------------------
 # GRID SETTINGS
 # ------------------------
-#SEEDS = [1]
-SEEDS = [1, 2, 3, 4, 5]
 
-#ALPHAS = [0.1]
+SEEDS = [1, 2, 3, 4, 5]
 ALPHAS = [0.1, 0.5, 1.0, 5.0, 10.0]
 
 AGENTS = 10
 ROUNDS = 20
 
-
 # ------------------------
 # ROOT FOLDER
 # ------------------------
+
 ROOT = "results"
 os.makedirs(ROOT, exist_ok=True)
-
 
 # ------------------------
 # RUN GRID SEARCH
 # ------------------------
+
 def main():
 
     total_runs = len(SEEDS) * len(ALPHAS)
@@ -47,7 +43,10 @@ def main():
             print(f"seed={seed}, alpha={alpha}")
             print("=" * 70)
 
-            result = run_experiment(
+            # ------------------------
+            # RUN EXPERIMENT
+            # ------------------------
+            result, df = run_experiment(
                 agents=AGENTS,
                 alpha=alpha,
                 rounds=ROUNDS,
@@ -56,10 +55,15 @@ def main():
             )
 
             # ------------------------
-            # SAVE RESULTS
+            # SAVE SUMMARY (JSON SAFE)
             # ------------------------
             with open(os.path.join(out_dir, "summary.json"), "w") as f:
                 json.dump(result, f, indent=2)
+
+            # ------------------------
+            # SAVE DATASET (ML READY)
+            # ------------------------
+            df.to_parquet(os.path.join(out_dir, "telemetry.parquet"))
 
     print("\nALL EXPERIMENTS DONE")
 

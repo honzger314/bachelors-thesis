@@ -10,7 +10,7 @@ from client import Client
 from server import Server
 from model import CNN
 from partitioning import dirichlet_split
-from telemetery import TelemetryCollector
+from telemetry import TelemetryCollector
 
 # ------------------------
 # SEED
@@ -157,16 +157,17 @@ def run_experiment(
             "loo": loo_scores
         })
 
+    df = telemetry.export()
+
     result = {
         "final_accuracy": history[-1]["accuracy"],
-        "history": history,
-        "telemetry": telemetry.export()
+        "history": history
     }
 
     if return_history:
-        return result, history
+        return result, df  # return DataFrame separately
 
-    return result
+    return result, df
 
 
 # optional run
