@@ -164,10 +164,15 @@ def run_experiment(
         "history": history
     }
 
-    if return_history:
-        return result, df  # return DataFrame separately
+    # free telemetry before leaving
+    del telemetry
+    import gc
+    gc.collect()
 
-    return result, df
+    if return_history:
+        return result, df
+
+    return result
 
 
 # optional run

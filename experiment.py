@@ -64,6 +64,9 @@ def main():
             # SAVE DATASET (ML READY)
             # ------------------------
             df.to_parquet(os.path.join(out_dir, "telemetry.parquet"))
+            del df
+            import gc
+            gc.collect()
 
     print("\nALL EXPERIMENTS DONE")
 
