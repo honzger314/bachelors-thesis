@@ -2,6 +2,7 @@ import torch
 import random
 import numpy as np
 import copy
+import math
 
 from torchvision import datasets, transforms
 from torch.utils.data import random_split
@@ -12,9 +13,11 @@ from model import CNN
 from partitioning import dirichlet_split
 from telemetry import TelemetryCollector
 
+
 # ------------------------
 # SEED
 # ------------------------
+
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -28,7 +31,9 @@ def set_seed(seed=42):
 # ------------------------
 # DATA
 # ------------------------
+
 def load_data(seed, val_ratio=0.1):
+
     transform = transforms.Compose([
         transforms.ToTensor()
     ])
@@ -62,11 +67,13 @@ def load_data(seed, val_ratio=0.1):
 # ------------------------
 # CORE EXPERIMENT
 # ------------------------
+
 def run_experiment(
     agents=10,
     alpha=0.5,
     rounds=20,
     seed=42,
+    participation_rate=1.0,
     device=None,
     return_history=True
 ):
@@ -74,14 +81,26 @@ def run_experiment(
     set_seed(seed)
 
     if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(
+            "cuda" if torch.cuda.is_available()
+            else "cpu"
+        )
 
     print("Using device:", device)
 
     train, val, test = load_data(seed)
 
-    test_loader = torch.utils.data.DataLoader(test, batch_size=64, shuffle=False)
-    val_loader = torch.utils.data.DataLoader(val, batch_size=64, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(
+        test,
+        batch_size=64,
+        shuffle=False
+    )
+
+    val_loader = torch.utils.data.DataLoader(
+        val,
+        batch_size=64,
+        shuffle=False
+    )
 
     shards = dirichlet_split(
         train,
@@ -102,41 +121,109 @@ def run_experiment(
 
     history = []
 
+
     # ------------------------
     # TRAIN LOOP
     # ------------------------
+
     for r in range(rounds):
+
         print(f"\n--- Round {r} ---")
 
-        old_weights = copy.deepcopy(global_model.state_dict())
+        old_weights = copy.deepcopy(
+            global_model.state_dict()
+        )
+
+        # ------------------------
+        # RANDOM PARTICIPATION
+        # ------------------------
+
+        num_participants = max(1, math.ceil(agents * participation_rate))
+
+        selected_clients = random.sample(
+            clients,
+            num_participants
+        )
+
+        selected_ids = [
+            c.client_id
+            for c in selected_clients
+        ]
+
+        print(
+            f"Participating clients: "
+            f"{selected_ids}"
+        )
+
 
         client_updates = []
 
-        for c in clients:
-            state, update, grad = c.train(global_model)
-            client_updates.append((state, update, grad))
+        for c in selected_clients:
+
+            state, update, grad = c.train(
+                global_model
+            )
+
+            client_updates.append(
+                (state, update, grad)
+            )
+
 
         # split tuples
-        client_states = [c[0] for c in client_updates]
-        client_grads = [c[2] for c in client_updates]
 
+        client_states = [
+            c[0]
+            for c in client_updates
+        ]
+
+        client_grads = [
+            c[2]
+            for c in client_updates
+        ]
+
+
+        # ------------------------
         # FedAvg
-        new_weights, _ = server.fedavg(client_updates)
+        # ------------------------
 
-        global_model.load_state_dict(new_weights)
-        server.set_weights(new_weights)
-
-        # LOO
-        full_acc, loo_scores = server.loo_evaluate(
-            client_updates,
-            lambda m: server.evaluate_model(m, val_loader, device)
+        new_weights, _ = server.fedavg(
+            client_updates
         )
 
-        acc = server.evaluate(test_loader, device)
+        global_model.load_state_dict(
+            new_weights
+        )
+
+        server.set_weights(
+            new_weights
+        )
+
 
         # ------------------------
-        # TELEMETRY LOGGING
+        # LOO
         # ------------------------
+
+        full_acc, loo_scores = server.loo_evaluate(
+            client_updates,
+            lambda m:
+                server.evaluate_model(
+                    m,
+                    val_loader,
+                    device
+                )
+        )
+
+
+        acc = server.evaluate(
+            test_loader,
+            device
+        )
+
+
+        # ------------------------
+        # TELEMETRY
+        # ------------------------
+
         telemetry.log_round(
             round_id=r,
             global_model=global_model,
@@ -149,25 +236,32 @@ def run_experiment(
             loo_scores=loo_scores
         )
 
+
         print("Accuracy:", acc)
+
 
         history.append({
             "round": r,
             "accuracy": acc,
-            "loo": loo_scores
+            "loo": loo_scores,
+            "participating_clients": selected_ids
         })
+
 
     df = telemetry.export()
 
+
     result = {
         "final_accuracy": history[-1]["accuracy"],
-        "history": history
+        "history": history,
+        "participation_rate": participation_rate
     }
 
-    # free telemetry before leaving
+
     del telemetry
     import gc
     gc.collect()
+
 
     if return_history:
         return result, df
@@ -175,6 +269,9 @@ def run_experiment(
     return result
 
 
-# optional run
+# ------------------------
+# OPTIONAL RUN
+# ------------------------
+
 if __name__ == "__main__":
     run_experiment()
