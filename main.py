@@ -146,7 +146,7 @@ def run_experiment(
         )
 
         selected_ids = [
-            c.client_id
+            c.id
             for c in selected_clients
         ]
 
