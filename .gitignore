@@ -1,3 +1,13 @@
+# Large generated files
+*.pkl
+*.parquet
+
+# Results
+results2/results/
+
+# If you only want to ignore these specific files:
+all_telemetry.pkl
+gradient_projector.pkl
 __pycache__/
 *.pyc
 data/
