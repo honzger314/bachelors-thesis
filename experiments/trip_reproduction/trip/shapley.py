@@ -40,37 +40,6 @@ def shapley_weight(n, subset_size):
 
 
 def compute_shapley(players, utility_function):
-    """
-    Computes the exact Shapley value.
-
-    Parameters
-    ----------
-    players : iterable
-
-        Example:
-            [2,4,7]
-
-    utility_function : callable
-
-        Receives a tuple/list representing a coalition.
-
-        Example:
-
-            utility((2,7))
-
-        Returns
-
-            float
-
-    Returns
-    -------
-    dict
-
-        {
-            player : shapley_value
-        }
-
-    """
 
     players = list(players)
 
@@ -80,6 +49,20 @@ def compute_shapley(players, utility_function):
         p: 0.0
         for p in players
     }
+
+
+    cache = {}
+
+
+    def cached_utility(coalition):
+
+        coalition = tuple(sorted(coalition))
+
+        if coalition not in cache:
+            cache[coalition] = utility_function(coalition)
+
+        return cache[coalition]
+
 
     for player in players:
 
@@ -98,8 +81,9 @@ def compute_shapley(players, utility_function):
             )
 
             marginal = (
-                utility_function(with_player)
-                - utility_function(subset)
+                cached_utility(with_player)
+                -
+                cached_utility(subset)
             )
 
             weight = shapley_weight(
@@ -110,6 +94,7 @@ def compute_shapley(players, utility_function):
             shapley[player] += (
                 weight * marginal
             )
+
 
     return shapley
 
