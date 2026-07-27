@@ -24,6 +24,7 @@ class Client:
         train_loader,
         device="cpu",
         learning_rate=0.01,
+        lcv_function=None,
         malicious=False,
         attack_type=None,
     ):
