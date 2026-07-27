@@ -6,8 +6,6 @@ import torch.nn as nn
 from models.cnn import create_model
 from utils.model_utils import average_models
 
-from trip.lcv import compute_lcv
-
 class Client:
     """
     One decentralized FL client.
@@ -26,15 +24,22 @@ class Client:
         train_loader,
         device="cpu",
         learning_rate=0.01,
+        malicious=False,
+        attack_type=None,
     ):
 
         self.id = client_id
         self.device = device
         self.train_loader = train_loader
 
+        self.malicious = malicious
+        self.attack_type = attack_type
+
         self.model = create_model().to(device)
 
         self.learning_rate = learning_rate
+
+        self.lcv_function = lcv_function
 
         # θ(t)
         self.pre_model = None
@@ -177,7 +182,8 @@ class Client:
         )
 
 
-        self.local_contribution_vector = compute_lcv(
+        self.local_contribution_vector = self.lcv_function(
+            client_id=self.id,
             messages=messages,
             test_loader=test_loader,
             device=self.device

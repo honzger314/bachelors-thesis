@@ -148,4 +148,9 @@ def compute_lcv(
     )
 
 
+    # Remove self-attribution
+    if client_id in shapley_values:
+        shapley_values[client_id] = 0.0
+
+
     return shapley_values

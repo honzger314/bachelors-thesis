@@ -1,3 +1,5 @@
+import random
+
 class Network:
     """
     Communication graph for DFL.
@@ -71,6 +73,13 @@ class Network:
 
             return self.create_line()
 
+        elif self.topology == "star":
+
+            return self.create_star()
+
+        elif self.topology == "random":
+
+            return self.create_random()
 
         else:
             raise ValueError(
@@ -177,7 +186,46 @@ class Network:
 
         return edges
 
+    def create_star(self):
 
+        edges = {}
+
+        center = 0
+
+        for i in range(self.num_clients):
+
+            if i == center:
+                edges[i] = [
+                    j for j in range(self.num_clients)
+                    if j != center
+                ]
+
+            else:
+                edges[i] = [
+                    center
+                ]
+
+        return edges
+
+    def create_random(self, probability=0.3):
+
+        edges = {
+            i: []
+            for i in range(self.num_clients)
+        }
+
+
+        for i in range(self.num_clients):
+
+            for j in range(i+1, self.num_clients):
+
+                if random.random() < probability:
+
+                    edges[i].append(j)
+                    edges[j].append(i)
+
+
+        return edges
 
     def neighbors(
         self,

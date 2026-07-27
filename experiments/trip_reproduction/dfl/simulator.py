@@ -1,8 +1,10 @@
 import torch
+import copy
 
 from dfl.client import Client
 from dfl.network import Network
 from trip.coordinator import Coordinator
+from trip.lcv_factory import get_lcv_function
 
 from data.dataset import create_client_loaders
 from utils.model_utils import evaluate_model
@@ -24,7 +26,8 @@ class DFLSimulator:
         local_epochs=1,
         batch_size=64,
         topology="ring",
-        device="cpu"
+        device="cpu",
+        lcv_method="original"
     ):
 
         self.num_clients = num_clients
@@ -41,6 +44,9 @@ class DFLSimulator:
 
         self.test_loader = test_loader
 
+        lcv_function = get_lcv_function(
+            lcv_method
+        )
 
         # Create clients
         self.clients = []
@@ -50,7 +56,8 @@ class DFLSimulator:
             client = Client(
                 client_id=i,
                 train_loader=client_loaders[i],
-                device=device
+                device=device,
+                lcv_function=lcv_function
             )
 
             self.clients.append(client)
@@ -67,6 +74,16 @@ class DFLSimulator:
         self.coordinator = Coordinator(
             num_clients=num_clients
         )
+
+        # Experiment history
+        self.history = {
+            "accuracy": [],
+            "client_accuracy": [],
+            "contributions": [],
+            "topology": topology,
+            "num_clients": num_clients,
+            "rounds": rounds,
+        }
 
 
     def train_round(self, round_number):
@@ -209,6 +226,12 @@ class DFLSimulator:
             self.network
         )
 
+        # Save TRIP-Shapley contribution state
+        self.history["contributions"].append(
+            copy.deepcopy(
+                self.coordinator.get_all_contributions()
+            )
+        )
 
         print(
             "Coordinator update complete"
@@ -300,6 +323,16 @@ class DFLSimulator:
             ) / len(accuracies)
 
 
+            # Save accuracy history
+            self.history["client_accuracy"].append(
+                accuracies
+            )
+
+            self.history["accuracy"].append(
+                mean_accuracy
+            )
+
+
             print(
                 f"Round {r+1}/{self.rounds} "
                 f"| Mean accuracy: "
@@ -313,3 +346,6 @@ class DFLSimulator:
 
 
         return self.clients
+
+    def get_history(self):
+        return self.history

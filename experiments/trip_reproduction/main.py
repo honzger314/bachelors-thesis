@@ -1,10 +1,36 @@
 import torch
+import argparse
+import os
+import pickle
 
 from dfl.simulator import DFLSimulator
 
 
-
 def main():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--lcv",
+        type=str,
+        default="original",
+        choices=[
+            "original",
+            "modified"
+        ],
+        help="Which LCV implementation to use"
+    )
+
+    args = parser.parse_args()
+
+
+    # Experiment parameters
+    num_clients = 10
+    rounds = 10
+    local_epochs = 1
+    batch_size = 64
+    topology = "ring"
+
 
     # Automatically use GPU if available
     device = (
@@ -19,17 +45,67 @@ def main():
     )
 
 
+    print(
+        f"Using LCV method: {args.lcv}"
+    )
+
+
     simulator = DFLSimulator(
-        num_clients=5,
-        rounds=3,
-        local_epochs=1,
-        batch_size=64,
-        topology="ring",
-        device=device
+        num_clients=num_clients,
+        rounds=rounds,
+        local_epochs=local_epochs,
+        batch_size=batch_size,
+        topology=topology,
+        device=device,
+        lcv_method=args.lcv
     )
 
 
     clients = simulator.train()
+
+
+    history = simulator.get_history()
+
+
+    print("\nAccuracy history:")
+    print(history["accuracy"])
+
+
+    #
+    # Save experiment results
+    #
+
+    os.makedirs(
+        "results",
+        exist_ok=True
+    )
+
+
+    filename = (
+        f"{topology}_"
+        f"{num_clients}clients_"
+        f"{rounds}rounds_"
+        f"{args.lcv}_lcv.pkl"
+    )
+
+
+    filepath = os.path.join(
+        "results",
+        filename
+    )
+
+
+    with open(filepath, "wb") as f:
+
+        pickle.dump(
+            history,
+            f
+        )
+
+
+    print(
+        f"\nSaved results to: {filepath}"
+    )
 
 
     print("\nFinal client accuracies:")
@@ -43,7 +119,6 @@ def main():
         print(
             f"Client {i}: {acc:.4f}"
         )
-
 
 
 if __name__ == "__main__":
