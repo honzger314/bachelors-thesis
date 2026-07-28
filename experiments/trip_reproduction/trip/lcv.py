@@ -67,11 +67,6 @@ def compute_utility(
     device="cpu"
 ):
 
-    print(
-        f"      Evaluating coalition {coalition}"
-    )
-
-
     model = build_mixed_model(
         coalition,
         messages,
@@ -84,12 +79,6 @@ def compute_utility(
         test_loader,
         device
     )
-
-
-    print(
-        f"      Coalition {coalition} accuracy={accuracy:.4f}"
-    )
-
 
     return accuracy
 

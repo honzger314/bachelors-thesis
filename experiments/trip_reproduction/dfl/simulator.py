@@ -147,7 +147,6 @@ class DFLSimulator:
                 client.create_message()
             )
 
-
             # Neighbor models
             for n in neighbor_ids:
 
@@ -155,15 +154,7 @@ class DFLSimulator:
                     self.clients[n].create_message()
                 )
 
-
             messages[client.id] = received
-
-
-            print(
-                f"Client {client.id} receives "
-                f"{len(received)} models"
-            )
-
 
 
         #
@@ -247,10 +238,6 @@ class DFLSimulator:
 
 
         for client in self.clients:
-
-            print(
-                f"Aggregating client {client.id}"
-            )
 
             weights = self.network.get_weights(client.id)
 

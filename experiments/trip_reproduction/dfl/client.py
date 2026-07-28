@@ -176,30 +176,11 @@ class Client:
 
         messages = received_messages
 
-
-        print(
-            f"[Client {self.id}] Starting LCV computation "
-            f"with {len(messages)} participants"
-        )
-
-
         self.local_contribution_vector = self.lcv_function(
             client_id=self.id,
             messages=messages,
             test_loader=test_loader,
             device=self.device
         )
-
-
-        print(
-            f"[Client {self.id}] Finished LCV computation"
-        )
-
-
-        print(
-            f"[Client {self.id}] LCV: "
-            f"{self.local_contribution_vector}"
-        )
-
 
         return self.local_contribution_vector
