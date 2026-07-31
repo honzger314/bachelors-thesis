@@ -83,6 +83,7 @@ class DFLSimulator:
             "topology": topology,
             "num_clients": num_clients,
             "rounds": rounds,
+            "lcv_method": lcv_method
         }
 
 
@@ -208,6 +209,10 @@ class DFLSimulator:
         #
         # 4. Coordinator update
         #
+        # Save raw LCVs for this round
+        self.history["lcvs"].append(
+            copy.deepcopy(lcv_dict)
+        )
 
         print("\n--- Updating coordinator ---")
 

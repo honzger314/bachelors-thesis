@@ -2,6 +2,8 @@ import torch
 import argparse
 import os
 import pickle
+import random
+import numpy as np
 
 from dfl.simulator import DFLSimulator
 
@@ -49,6 +51,19 @@ def main():
         f"Using LCV method: {args.lcv}"
     )
 
+    # Fixed seed for reproducible experiments
+    seed = 42
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     simulator = DFLSimulator(
         num_clients=num_clients,
@@ -85,7 +100,8 @@ def main():
         f"{topology}_"
         f"{num_clients}clients_"
         f"{rounds}rounds_"
-        f"{args.lcv}_lcv.pkl"
+        f"{args.lcv}_lcv_"
+        f"seed{seed}.pkl"
     )
 
 
