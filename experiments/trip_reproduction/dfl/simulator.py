@@ -27,14 +27,24 @@ class DFLSimulator:
         batch_size=64,
         topology="ring",
         device="cpu",
-        lcv_method="original"
+        lcv_method="original",
+        malicious_clients=None,
+        attack_type=None,
+        fake_lcv_value=1.0
     ):
 
         self.num_clients = num_clients
         self.rounds = rounds
         self.local_epochs = local_epochs
         self.device = device
+        self.lcv_method = lcv_method
 
+        if malicious_clients is None:
+            malicious_clients = []
+
+        self.malicious_clients = malicious_clients
+        self.attack_type = attack_type
+        self.fake_lcv_value = fake_lcv_value
 
         # Create datasets
         client_loaders, test_loader = create_client_loaders(
@@ -57,7 +67,10 @@ class DFLSimulator:
                 client_id=i,
                 train_loader=client_loaders[i],
                 device=device,
-                lcv_function=lcv_function
+                lcv_function=lcv_function,
+                malicious=(i in self.malicious_clients),
+                attack_type=self.attack_type,
+                fake_lcv_value=self.fake_lcv_value
             )
 
             self.clients.append(client)
@@ -80,10 +93,11 @@ class DFLSimulator:
             "accuracy": [],
             "client_accuracy": [],
             "contributions": [],
+            "lcv_method": lcv_method,
+            "lcv_vectors": [],
             "topology": topology,
             "num_clients": num_clients,
-            "rounds": rounds,
-            "lcv_method": lcv_method
+            "rounds": rounds
         }
 
 
@@ -200,6 +214,8 @@ class DFLSimulator:
             for cid, value in lcv.items():
 
                 vector[cid] = value
+            if self.lcv_method == "modified":
+                vector[client.id] = 0.0
 
 
             lcv_dict[client.id] = vector
@@ -210,7 +226,7 @@ class DFLSimulator:
         # 4. Coordinator update
         #
         # Save raw LCVs for this round
-        self.history["lcvs"].append(
+        self.history["lcv_vectors"].append(
             copy.deepcopy(lcv_dict)
         )
 
