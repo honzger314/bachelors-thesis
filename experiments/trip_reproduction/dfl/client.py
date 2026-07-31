@@ -27,6 +27,7 @@ class Client:
         lcv_function=None,
         malicious=False,
         attack_type=None,
+        fake_lcv_value=1.0,
     ):
 
         self.id = client_id
@@ -35,6 +36,7 @@ class Client:
 
         self.malicious = malicious
         self.attack_type = attack_type
+        self.fake_lcv_value = fake_lcv_value
 
         self.model = create_model().to(device)
 
@@ -182,5 +184,12 @@ class Client:
             test_loader=test_loader,
             device=self.device
         )
+        if (
+            self.malicious
+            and self.attack_type == "fake_lcv"
+        ):
+            self.local_contribution_vector[self.id] = (
+                self.fake_lcv_value
+            )
 
         return self.local_contribution_vector

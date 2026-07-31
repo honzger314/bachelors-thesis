@@ -23,6 +23,24 @@ def main():
         help="Which LCV implementation to use"
     )
 
+    parser.add_argument(
+        "--attack",
+        type=str,
+        default="none",
+        choices=[
+            "none",
+            "fake_lcv"
+        ],
+        help="Attack to perform"
+    )
+
+    parser.add_argument(
+        "--malicious",
+        type=int,
+        default=0,
+        help="Number of malicious clients"
+    )
+
     args = parser.parse_args()
 
 
@@ -65,6 +83,23 @@ def main():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
+    # Randomly select malicious clients
+    if args.malicious > num_clients:
+        raise ValueError(
+            "Number of malicious clients cannot exceed number of clients"
+        )
+
+    malicious_clients = random.sample(
+        range(num_clients),
+        args.malicious
+    )
+
+    print(
+        f"Malicious clients: {malicious_clients}"
+    )
+
+
     simulator = DFLSimulator(
         num_clients=num_clients,
         rounds=rounds,
@@ -72,7 +107,10 @@ def main():
         batch_size=batch_size,
         topology=topology,
         device=device,
-        lcv_method=args.lcv
+        lcv_method=args.lcv,
+        malicious_clients=malicious_clients,
+        attack_type=args.attack,
+        fake_lcv_value=1.0
     )
 
 
