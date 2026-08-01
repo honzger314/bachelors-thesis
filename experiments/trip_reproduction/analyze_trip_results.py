@@ -6,9 +6,8 @@ import numpy as np
 
 
 RESULTS_DIR = Path("results")
-ORIGINAL_FILE = RESULTS_DIR / "ring_10clients_10rounds_original_lcv.pkl"
-MODIFIED_FILE = RESULTS_DIR / "ring_10clients_10rounds_modified_lcv.pkl"
-
+ORIGINAL_FILE = RESULTS_DIR / "ring_10clients_10rounds_original_lcv_seed42_malicious1.pkl"
+MODIFIED_FILE = RESULTS_DIR / "ring_10clients_10rounds_modified_lcv_seed42_malicious1.pkl"
 
 def load_result(path):
     print(f"\nLoading: {path}")
@@ -32,6 +31,15 @@ def inspect_history(name, history):
     accuracy = history.get("accuracy", [])
     client_accuracy = history.get("client_accuracy", [])
     contributions = history.get("contributions", [])
+    lcvs = history.get("lcv_vectors", [])
+
+    print(f"Number of LCV snapshots: {len(lcvs)}")
+
+    if lcvs:
+        print(
+            f"LCV snapshot clients: "
+            f"{sorted(lcvs[-1].keys())}"
+        )
 
     print(f"Number of accuracy entries: {len(accuracy)}")
     print(f"Number of client-accuracy entries: {len(client_accuracy)}")
@@ -105,6 +113,11 @@ def plot_accuracy(original, modified):
 
 
 def plot_final_contributions(history, title):
+
+    if not history.get("contributions"):
+        print("No contribution data available")
+        return
+
     contributions = history["contributions"][-1]
     client_ids = sorted(contributions.keys())
 

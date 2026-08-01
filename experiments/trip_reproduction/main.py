@@ -41,6 +41,13 @@ def main():
         help="Number of malicious clients"
     )
 
+    parser.add_argument(
+        "--strength",
+        type=float,
+        default=1.0,
+        help="Strength of fake LCV attack"
+    )
+
     args = parser.parse_args()
 
 
@@ -110,7 +117,7 @@ def main():
         lcv_method=args.lcv,
         malicious_clients=malicious_clients,
         attack_type=args.attack,
-        fake_lcv_value=1.0
+        fake_lcv_value=args.strength
     )
 
 
@@ -139,7 +146,8 @@ def main():
         f"{num_clients}clients_"
         f"{rounds}rounds_"
         f"{args.lcv}_lcv_"
-        f"seed{seed}.pkl"
+        f"seed{seed}_"
+        f"strength{args.strength}.pkl"
     )
 
 
