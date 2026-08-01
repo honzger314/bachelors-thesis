@@ -33,14 +33,14 @@ def load_cifar10(
     train_dataset = datasets.CIFAR10(
         root=data_path,
         train=True,
-        download=True,
+        download=False,
         transform=transform
     )
 
     test_dataset = datasets.CIFAR10(
         root=data_path,
         train=False,
-        download=True,
+        download=False,
         transform=transform
     )
 
@@ -108,7 +108,7 @@ def split_dataset(
 def create_client_loaders(
     num_clients,
     batch_size=64,
-    data_path="./data",
+    data_path="/content/drive/MyDrive/datasets",
     seed=42
 ):
     """
