@@ -53,7 +53,7 @@ def main():
 
     # Experiment parameters
     num_clients = 10
-    rounds = 10
+    rounds = 20
     local_epochs = 1
     batch_size = 64
     topology = "ring"
@@ -77,7 +77,7 @@ def main():
     )
 
     # Fixed seed for reproducible experiments
-    seed = 42
+    seed = 1
 
     random.seed(seed)
     np.random.seed(seed)
@@ -142,6 +142,7 @@ def main():
 
 
     filename = (
+        f"CIFAR10_"
         f"{topology}_"
         f"{num_clients}clients_"
         f"{rounds}rounds_"

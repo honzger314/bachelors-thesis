@@ -5,27 +5,23 @@ from torchvision import datasets, transforms
 
 def get_transform():
     """
-    Image preprocessing.
-
-    MNIST is already normalized, but converting to tensor
-    is required for PyTorch models.
+    CIFAR-10 preprocessing.
     """
 
     return transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(
-            (0.1307,),
-            (0.3081,)
+            (0.4914, 0.4822, 0.4465),
+            (0.2470, 0.2435, 0.2616)
         )
     ])
 
 
-
-def load_mnist(
+def load_cifar10(
     data_path="./data"
 ):
     """
-    Downloads and loads MNIST.
+    Downloads and loads CIFAR-10.
 
     Returns:
         train_dataset
@@ -34,14 +30,14 @@ def load_mnist(
 
     transform = get_transform()
 
-    train_dataset = datasets.MNIST(
+    train_dataset = datasets.CIFAR10(
         root=data_path,
         train=True,
         download=True,
         transform=transform
     )
 
-    test_dataset = datasets.MNIST(
+    test_dataset = datasets.CIFAR10(
         root=data_path,
         train=False,
         download=True,
@@ -58,33 +54,13 @@ def split_dataset(
     seed=42
 ):
     """
-    Splits dataset into independent client datasets.
+    IID split of dataset among clients.
 
-    Currently:
-        IID split
-
-    Example:
-
-        60000 samples
-        5 clients
-
-        Client 0:
-            12000 samples
-
-        Client 1:
-            12000 samples
-
-        ...
-
-    Later this function can be replaced with:
-        - label skew
-        - quantity skew
-        - noisy labels
-        - noisy images
+    Every client receives an equal number
+    of randomly sampled training examples.
     """
 
     generator = torch.Generator()
-
     generator.manual_seed(seed)
 
     total_size = len(dataset)
@@ -105,7 +81,6 @@ def split_dataset(
 
         start = i * split_size
 
-        # Last client gets remaining samples
         if i == num_clients - 1:
             end = total_size
         else:
@@ -137,18 +112,21 @@ def create_client_loaders(
     seed=42
 ):
     """
-    Creates DataLoaders for every client.
+    Creates CIFAR-10 dataloaders for clients.
 
     Returns:
 
     [
-        loader_client_0,
-        loader_client_1,
+        client0_loader,
+        client1_loader,
         ...
     ]
+
+    and shared test loader.
     """
 
-    train_dataset, test_dataset = load_mnist(
+
+    train_dataset, test_dataset = load_cifar10(
         data_path
     )
 
