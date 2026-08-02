@@ -33,14 +33,14 @@ def load_cifar10(
     train_dataset = datasets.CIFAR10(
         root=data_path,
         train=True,
-        download=False,
+        download=True,
         transform=transform
     )
 
     test_dataset = datasets.CIFAR10(
         root=data_path,
         train=False,
-        download=False,
+        download=True,
         transform=transform
     )
 
