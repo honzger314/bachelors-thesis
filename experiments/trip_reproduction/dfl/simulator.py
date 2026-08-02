@@ -5,6 +5,7 @@ from dfl.client import Client
 from dfl.network import Network
 from trip.coordinator import Coordinator
 from trip.lcv_factory import get_lcv_function
+from models.cnn import create_model
 
 from data.dataset import create_client_loaders
 from utils.model_utils import evaluate_model
@@ -21,7 +22,7 @@ class DFLSimulator:
 
     def __init__(
         self,
-        num_clients=5,
+        num_clients=10,
         rounds=20,
         local_epochs=1,
         batch_size=64,
@@ -59,10 +60,13 @@ class DFLSimulator:
         )
 
         # Create clients
+        # Create clients
         self.clients = []
 
-        for i in range(num_clients):
+        global_model = create_model().to(device)
+        global_state = copy.deepcopy(global_model.state_dict())
 
+        for i in range(num_clients):
             client = Client(
                 client_id=i,
                 train_loader=client_loaders[i],
@@ -72,7 +76,7 @@ class DFLSimulator:
                 attack_type=self.attack_type,
                 fake_lcv_value=self.fake_lcv_value
             )
-
+            client.model.load_state_dict(global_state)  # <-- synchronize init
             self.clients.append(client)
 
 
