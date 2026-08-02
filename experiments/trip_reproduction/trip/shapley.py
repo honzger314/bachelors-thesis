@@ -118,36 +118,3 @@ def normalize(values):
         k: v / total
         for k, v in values.items()
     }
-
-
-if __name__ == "__main__":
-
-    #
-    # Small sanity check
-    #
-
-    players = [0, 1, 2]
-
-    def utility(coalition):
-        """
-        Simple additive game.
-
-        value(S)=sum(player_id+1)
-        """
-
-        score = 0
-
-        for p in coalition:
-            score += p + 1
-
-        return score
-
-    phi = compute_shapley(
-        players,
-        utility
-    )
-
-    print("Shapley values:")
-
-    for k, v in phi.items():
-        print(f"{k}: {v:.3f}")

@@ -13,17 +13,6 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--lcv",
-        type=str,
-        default="original",
-        choices=[
-            "original",
-            "modified"
-        ],
-        help="Which LCV implementation to use"
-    )
-
-    parser.add_argument(
         "--attack",
         type=str,
         default="none",
@@ -72,10 +61,6 @@ def main():
     )
 
 
-    print(
-        f"Using LCV method: {args.lcv}"
-    )
-
     # Fixed seed for reproducible experiments
     seed = 1
 
@@ -102,6 +87,7 @@ def main():
         args.malicious
     )
 
+
     print(
         f"Malicious clients: {malicious_clients}"
     )
@@ -114,7 +100,6 @@ def main():
         batch_size=batch_size,
         topology=topology,
         device=device,
-        lcv_method=args.lcv,
         malicious_clients=malicious_clients,
         attack_type=args.attack,
         fake_lcv_value=args.strength
@@ -146,9 +131,10 @@ def main():
         f"{topology}_"
         f"{num_clients}clients_"
         f"{rounds}rounds_"
-        f"{args.lcv}_lcv_"
-        f"seed{seed}_"
-        f"strength{args.strength}.pkl"
+        f"attack_{args.attack}_"
+        f"malicious_{args.malicious}_"
+        f"strength_{args.strength}_"
+        f"seed_{seed}.pkl"
     )
 
 
@@ -167,7 +153,7 @@ def main():
 
 
     print(
-        f"\nSaved results to: {filepath}"
+        f"\nSaved experiment results to: {filepath}"
     )
 
 

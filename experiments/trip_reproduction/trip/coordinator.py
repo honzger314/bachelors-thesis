@@ -1,23 +1,23 @@
 import torch
+import copy
 
 
 class Coordinator:
     """
-    Lightweight TRIP-Shapley coordinator.
+    TRIP-Shapley coordinator maintaining two contribution versions.
+
+    Original:
+        Uses received LCV vectors unchanged.
+
+    Modified:
+        Removes self-contribution:
+            ψ_i(i,t) = 0
 
     The coordinator:
         - does NOT see model parameters
         - does NOT train models
         - only receives LCVs
         - tracks contribution propagation
-
-    Implements Equation (3):
-
-        φ_i^(t+1)
-        =
-        weighted inherited contribution
-        +
-        local contribution vector
     """
 
     def __init__(
@@ -31,84 +31,51 @@ class Coordinator:
         #
         # φ_i^(0)=0
         #
-        # Every client starts with no
-        # known contribution.
+        # Original TRIP-Shapley state
         #
-
-        self.contributions = {
-
-            i: torch.zeros(
-                num_clients
-            )
-
+        self.original_contributions = {
+            i: torch.zeros(num_clients)
             for i in range(num_clients)
+        }
 
+
+        #
+        # Modified method state
+        #
+        self.modified_contributions = {
+            i: torch.zeros(num_clients)
+            for i in range(num_clients)
         }
 
 
 
-    def update(
+    def update_single(
         self,
         client_id,
-        neighbor_ids,
         local_contribution_vector,
-        weights=None
+        network,
+        contribution_state
     ):
         """
-        Update contribution vector
-        of one client.
+        Performs one coordinator update.
 
-        Parameters
-        ----------
-        client_id:
-
-            Client whose model is updated.
-
-
-        neighbor_ids:
-
-            N(i,t) excluding itself.
-
-
-        local_contribution_vector:
-
-            ψ(i,t)
-
-
-        weights:
-
-            Aggregation weights w_ij
-
-
+        This is shared by original and modified versions.
         """
 
+        neighbors = network.neighbors(
+            client_id
+        )
 
-        #
-        # Include the client itself
-        #
-        # N(i,t)=neighbors + {i}
-        #
 
         participants = [
             client_id
-        ] + list(neighbor_ids)
+        ] + list(neighbors)
 
 
+        weights = network.get_weights(
+            client_id
+        )
 
-        if weights is None:
-
-            weights = {
-                p: 1.0 / len(participants)
-                for p in participants
-            }
-
-
-
-        #
-        # First term of Equation (3)
-        #
-        # propagated previous influence
-        #
 
         propagated = torch.zeros(
             self.num_clients
@@ -120,17 +87,14 @@ class Coordinator:
 
         for p in participants:
 
-            weight = weights[p]
-
+            w = weights[p]
 
             propagated += (
-                weight
-                *
-                self.contributions[p]
+                w *
+                contribution_state[p]
             )
 
-
-            total_weight += weight
+            total_weight += w
 
 
 
@@ -140,20 +104,10 @@ class Coordinator:
 
 
 
-        #
-        # Second term:
-        #
-        # new contribution from this round
-        #
-
-        new_vector = (
-            propagated
-            +
+        return (
+            propagated +
             local_contribution_vector
         )
-
-
-        self.contributions[client_id] = new_vector
 
 
 
@@ -163,76 +117,79 @@ class Coordinator:
         network
     ):
         """
-        Update all clients for one round.
-
-        Parameters:
+        Update both contribution versions.
 
         lcv_dict:
 
-            {
-              client_id:
-                  ψ(i,t)
-            }
-
-        network:
-
-            DFL network object
+        {
+            client_id:
+                ψ(i,t)
+        }
 
         """
+
         print(
             f"[Coordinator] Updating contributions for "
             f"{len(lcv_dict)} clients"
         )
 
-        new_values = {}
+
+        #
+        # Temporary dictionaries because all
+        # clients update simultaneously.
+        #
+
+        new_original = {}
+        new_modified = {}
+
 
 
         for client_id, lcv in lcv_dict.items():
+
             print(
                 f"[Coordinator] Updating client {client_id}"
             )
-            neighbors = network.neighbors(
-                client_id
+
+
+            #
+            # Version 1:
+            # Original TRIP-Shapley
+            #
+
+            new_original[client_id] = self.update_single(
+                client_id,
+                lcv,
+                network,
+                self.original_contributions
             )
 
 
-            participants = [
-                client_id
-            ] + neighbors
 
+            #
+            # Version 2:
+            # Modified method
+            #
 
-            weights = network.get_weights(client_id)
-
-
-            propagated = torch.zeros(
-                self.num_clients
-            )
-
-            total_weight = 0.0
-
-
-            for p in participants:
-
-                w = weights[p]
-
-                propagated += (
-                    w
-                    *
-                    self.contributions[p]
-                )
-
-                total_weight += w
-
-
-            if total_weight > 0:
-                propagated /= total_weight
-
-
-            new_values[client_id] = (
-                propagated
-                +
+            modified_lcv = copy.deepcopy(
                 lcv
             )
+
+
+            #
+            # Remove self contribution
+            #
+
+            modified_lcv[client_id] = 0.0
+
+
+
+            new_modified[client_id] = self.update_single(
+                client_id,
+                modified_lcv,
+                network,
+                self.modified_contributions
+            )
+
 
             print(
                 "[Coordinator] Round propagation finished"
@@ -241,32 +198,50 @@ class Coordinator:
 
 
         #
-        # Synchronize all updates after
-        # the round.
-        #
-        # Important because all clients
-        # update simultaneously.
+        # Synchronize updates
         #
 
-        self.contributions = new_values
+        self.original_contributions = new_original
+
+        self.modified_contributions = new_modified
 
 
 
     def get_contribution(
         self,
-        client_id
+        client_id,
+        method="original"
     ):
         """
-        Return final φ_i.
+        Return one client's contribution vector.
         """
 
-        return self.contributions[client_id]
+        if method == "original":
+
+            return self.original_contributions[client_id]
+
+
+        elif method == "modified":
+
+            return self.modified_contributions[client_id]
+
+
+        else:
+
+            raise ValueError(
+                f"Unknown method: {method}"
+            )
 
 
 
-    def get_all_contributions(self):
+    def get_all_contributions(
+        self
+    ):
         """
-        Return all contribution vectors.
+        Return both contribution histories.
         """
 
-        return self.contributions
+        return {
+            "original": self.original_contributions,
+            "modified": self.modified_contributions
+        }

@@ -4,7 +4,7 @@ import copy
 from dfl.client import Client
 from dfl.network import Network
 from trip.coordinator import Coordinator
-from trip.lcv_factory import get_lcv_function
+from trip.lcv import compute_lcv
 from models.cnn import create_model
 
 from data.dataset import create_client_loaders
@@ -15,9 +15,11 @@ class DFLSimulator:
     """
     Decentralized Federated Learning simulator.
 
-    There is no central server.
-    Clients communicate only through
-    the defined network topology.
+    Computes one LCV vector per client.
+
+    The coordinator stores:
+        - original TRIP-Shapley contributions
+        - modified contributions (self contribution removed)
     """
 
     def __init__(
@@ -28,7 +30,6 @@ class DFLSimulator:
         batch_size=64,
         topology="ring",
         device="cpu",
-        lcv_method="original",
         malicious_clients=None,
         attack_type=None,
         fake_lcv_value=1.0
@@ -38,16 +39,21 @@ class DFLSimulator:
         self.rounds = rounds
         self.local_epochs = local_epochs
         self.device = device
-        self.lcv_method = lcv_method
+
 
         if malicious_clients is None:
             malicious_clients = []
+
 
         self.malicious_clients = malicious_clients
         self.attack_type = attack_type
         self.fake_lcv_value = fake_lcv_value
 
-        # Create datasets
+
+        #
+        # Dataset
+        #
+
         client_loaders, test_loader = create_client_loaders(
             num_clients=num_clients,
             batch_size=batch_size
@@ -55,69 +61,97 @@ class DFLSimulator:
 
         self.test_loader = test_loader
 
-        lcv_function = get_lcv_function(
-            lcv_method
-        )
 
-        # Create clients
-        # Create clients
+
+        #
+        # LCV function
+        #
+
+        lcv_function = compute_lcv
+
+
+
+        #
+        # Create synchronized clients
+        #
+
         self.clients = []
 
+
         global_model = create_model().to(device)
-        global_state = copy.deepcopy(global_model.state_dict())
+
+        global_state = copy.deepcopy(
+            global_model.state_dict()
+        )
+
 
         for i in range(num_clients):
+
             client = Client(
                 client_id=i,
                 train_loader=client_loaders[i],
                 device=device,
                 lcv_function=lcv_function,
-                malicious=(i in self.malicious_clients),
-                attack_type=self.attack_type,
-                fake_lcv_value=self.fake_lcv_value
+                malicious=(i in malicious_clients),
+                attack_type=attack_type,
+                fake_lcv_value=fake_lcv_value
             )
-            client.model.load_state_dict(global_state)  # <-- synchronize init
+
+
+            client.model.load_state_dict(
+                global_state
+            )
+
+
             self.clients.append(client)
 
 
-        # Create communication graph
+
+        #
+        # Network
+        #
+
         self.network = Network(
             num_clients=num_clients,
             topology=topology
         )
 
 
-        # TRIP-Shapley coordinator
+
+        #
+        # One coordinator handles both versions
+        #
+
         self.coordinator = Coordinator(
             num_clients=num_clients
         )
 
-        # Experiment history
+
+
+        #
+        # History
+        #
+
         self.history = {
+
             "accuracy": [],
             "client_accuracy": [],
-            "contributions": [],
-            "lcv_method": lcv_method,
+
             "lcv_vectors": [],
+
+            "contributions": [],
+
             "topology": topology,
             "num_clients": num_clients,
             "rounds": rounds
         }
 
 
-    def train_round(self, round_number):
-        """
-        Executes one TRIP-Shapley DFL round.
 
-        Order:
-
-        1. Local training
-        2. Exchange pre/post models
-        3. Compute LCVs
-        4. Send LCVs to coordinator
-        5. Aggregate models
-        """
-
+    def train_round(
+        self,
+        round_number
+    ):
 
         print("\n======================")
         print(f"Starting round {round_number + 1}")
@@ -130,6 +164,7 @@ class DFLSimulator:
 
         print("\n--- Local training ---")
 
+
         for client in self.clients:
 
             print(
@@ -137,9 +172,11 @@ class DFLSimulator:
                 f"Training client {client.id}"
             )
 
+
             client.train_local(
                 epochs=self.local_epochs
             )
+
 
 
         #
@@ -148,39 +185,40 @@ class DFLSimulator:
 
         print("\n--- Creating messages ---")
 
+
         messages = {}
 
 
         for client in self.clients:
 
-            neighbor_ids = self.network.neighbors(
-                client.id
-            )
-
-
             received = []
 
 
-            # Own model
             received.append(
                 client.create_message()
             )
 
-            # Neighbor models
-            for n in neighbor_ids:
+
+            for neighbor in self.network.neighbors(
+                client.id
+            ):
 
                 received.append(
-                    self.clients[n].create_message()
+                    self.clients[neighbor].create_message()
                 )
+
 
             messages[client.id] = received
 
 
+
         #
-        # 3. Compute LCVs
+        # 3. Compute LCV once
         #
 
-        print("\n--- Computing Local Contribution Vectors ---")
+        print(
+            "\n--- Computing Local Contribution Vectors ---"
+        )
 
 
         lcv_dict = {}
@@ -189,8 +227,7 @@ class DFLSimulator:
         for client in self.clients:
 
             print(
-                f"\n[Client {client.id}] "
-                "Starting LCV"
+                f"\n[Client {client.id}] Starting LCV"
             )
 
 
@@ -201,14 +238,9 @@ class DFLSimulator:
 
 
             print(
-                f"[Client {client.id}] "
-                "Finished LCV"
+                f"[Client {client.id}] Finished LCV"
             )
 
-
-            #
-            # Dictionary -> vector
-            #
 
             vector = torch.zeros(
                 self.num_clients
@@ -218,23 +250,25 @@ class DFLSimulator:
             for cid, value in lcv.items():
 
                 vector[cid] = value
-            if self.lcv_method == "modified":
-                vector[client.id] = 0.0
 
 
             lcv_dict[client.id] = vector
 
 
 
-        #
-        # 4. Coordinator update
-        #
-        # Save raw LCVs for this round
         self.history["lcv_vectors"].append(
             copy.deepcopy(lcv_dict)
         )
 
-        print("\n--- Updating coordinator ---")
+
+
+        #
+        # 4. Coordinator updates both versions
+        #
+
+        print(
+            "\n--- Updating coordinator ---"
+        )
 
 
         self.coordinator.update_round(
@@ -242,12 +276,13 @@ class DFLSimulator:
             self.network
         )
 
-        # Save TRIP-Shapley contribution state
+
         self.history["contributions"].append(
             copy.deepcopy(
                 self.coordinator.get_all_contributions()
             )
         )
+
 
         print(
             "Coordinator update complete"
@@ -259,12 +294,17 @@ class DFLSimulator:
         # 5. Aggregate models
         #
 
-        print("\n--- Model aggregation ---")
+        print(
+            "\n--- Model aggregation ---"
+        )
 
 
         for client in self.clients:
 
-            weights = self.network.get_weights(client.id)
+            weights = self.network.get_weights(
+                client.id
+            )
+
 
             client.aggregate(
                 received_messages=messages[client.id],
@@ -279,10 +319,6 @@ class DFLSimulator:
 
 
     def evaluate(self):
-        """
-        Evaluate all client models
-        on the shared test set.
-        """
 
         accuracies = []
 
@@ -303,9 +339,6 @@ class DFLSimulator:
 
 
     def train(self):
-        """
-        Run complete DFL training.
-        """
 
         print(
             "Starting DFL training"
@@ -317,9 +350,7 @@ class DFLSimulator:
 
         for r in range(self.rounds):
 
-            self.train_round(
-                round_number=r
-            )
+            self.train_round(r)
 
 
             print(
@@ -335,10 +366,10 @@ class DFLSimulator:
             ) / len(accuracies)
 
 
-            # Save accuracy history
             self.history["client_accuracy"].append(
                 accuracies
             )
+
 
             self.history["accuracy"].append(
                 mean_accuracy
@@ -347,9 +378,9 @@ class DFLSimulator:
 
             print(
                 f"Round {r+1}/{self.rounds} "
-                f"| Mean accuracy: "
-                f"{mean_accuracy:.4f}"
+                f"| Mean accuracy: {mean_accuracy:.4f}"
             )
+
 
 
         print(
@@ -359,5 +390,8 @@ class DFLSimulator:
 
         return self.clients
 
+
+
     def get_history(self):
+
         return self.history
