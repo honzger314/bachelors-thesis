@@ -6,8 +6,11 @@ import numpy as np
 
 
 RESULTS_DIR = Path("results")
-ORIGINAL_FILE = RESULTS_DIR / "ring_10clients_10rounds_original_lcv_seed42_malicious1.pkl"
-MODIFIED_FILE = RESULTS_DIR / "ring_10clients_10rounds_modified_lcv_seed42_malicious1.pkl"
+
+# One file now contains every scenario (clean, single_s1..s50, multi_fixed)
+# and both original/modified contribution tracking within each scenario.
+RESULTS_FILE = RESULTS_DIR / "CIFAR10_ring_10clients_20rounds_seed_1.pkl"
+
 
 def load_result(path):
     print(f"\nLoading: {path}")
@@ -17,33 +20,29 @@ def load_result(path):
         return pickle.load(f)
 
 
-def inspect_history(name, history):
+def inspect_history(history):
     print("\n" + "=" * 70)
-    print(f"{name}")
+    print("EXPERIMENT SUMMARY")
     print("=" * 70)
 
     print("Keys:", list(history.keys()))
 
-    for key in ["topology", "num_clients", "rounds", "lcv_method"]:
+    for key in ["topology", "num_clients", "rounds",
+                "single_attacker_id", "multi_attacker_ids"]:
         if key in history:
             print(f"{key}: {history[key]}")
 
     accuracy = history.get("accuracy", [])
     client_accuracy = history.get("client_accuracy", [])
-    contributions = history.get("contributions", [])
     lcvs = history.get("lcv_vectors", [])
+    contributions = history.get("contributions", {})
 
-    print(f"Number of LCV snapshots: {len(lcvs)}")
-
+    print(f"\nNumber of LCV snapshots: {len(lcvs)}")
     if lcvs:
-        print(
-            f"LCV snapshot clients: "
-            f"{sorted(lcvs[-1].keys())}"
-        )
+        print(f"LCV snapshot clients: {sorted(lcvs[-1].keys())}")
 
     print(f"Number of accuracy entries: {len(accuracy)}")
     print(f"Number of client-accuracy entries: {len(client_accuracy)}")
-    print(f"Number of contribution snapshots: {len(contributions)}")
 
     if accuracy:
         print(f"Accuracy first round: {accuracy[0]:.4f}")
@@ -55,128 +54,116 @@ def inspect_history(name, history):
         print(f"Client accuracy history shape: {arr.shape}")
         print(f"Final client accuracies: {np.round(arr[-1], 4)}")
 
-    if contributions:
-        # contributions is expected to be:
-        # list[round][client_id] -> vector
-        n_rounds = len(contributions)
-        client_ids = sorted(contributions[-1].keys())
-        n_clients = len(client_ids)
+    print(f"\nScenarios found: {list(contributions.keys())}")
 
-        print(f"Contribution snapshots: {n_rounds}")
-        print(f"Number of clients in final snapshot: {n_clients}")
+    for scenario_name, rounds_list in contributions.items():
+        print(f"\n--- Scenario: {scenario_name} ---")
+        print(f"  Rounds recorded: {len(rounds_list)}")
 
-        final_matrix = np.stack(
-            [np.asarray(contributions[-1][cid], dtype=float) for cid in client_ids]
-        )
-        print(f"Final contribution matrix shape: {final_matrix.shape}")
+        if not rounds_list:
+            continue
 
-        # Basic sanity checks
-        finite = np.isfinite(final_matrix).all()
-        print(f"Final contribution matrix finite: {finite}")
+        final = rounds_list[-1]  # {"original": {...}, "modified": {...}}
 
-        # Row = receiver, column = contributor
-        diagonal = np.diag(final_matrix)
-        print(f"Final diagonal (self-contribution entries): {np.round(diagonal, 6)}")
-        print(f"Max absolute self-contribution: {np.max(np.abs(diagonal)):.6g}")
+        for version in ["original", "modified"]:
+            if version not in final:
+                continue
 
-        # Show largest contributor for each receiver
-        for row_idx, cid in enumerate(client_ids):
-            row = final_matrix[row_idx].copy()
-            top = int(np.argmax(row))
-            print(
-                f"  Client {cid}: top contributor = {top}, "
-                f"value = {row[top]:.6f}"
+            version_dict = final[version]
+            client_ids = sorted(version_dict.keys())
+
+            matrix = np.stack(
+                [np.asarray(version_dict[cid], dtype=float) for cid in client_ids]
             )
 
+            finite = np.isfinite(matrix).all()
+            diagonal = np.diag(matrix)
 
-def plot_accuracy(original, modified):
+            print(f"  [{version}] matrix shape: {matrix.shape}, finite: {finite}")
+            print(f"  [{version}] self-contribution diagonal: {np.round(diagonal, 6)}")
+            print(f"  [{version}] max |self-contribution|: {np.max(np.abs(diagonal)):.6g}")
+
+
+def get_final_matrix(history, scenario_name, version):
+    """
+    Returns the final-round contribution matrix for a given
+    scenario ("clean", "single_s1", ..., "multi_fixed") and
+    version ("original" or "modified").
+    """
+
+    contributions = history["contributions"][scenario_name]
+    final = contributions[-1][version]
+    client_ids = sorted(final.keys())
+
+    matrix = np.stack(
+        [np.asarray(final[cid], dtype=float) for cid in client_ids]
+    )
+
+    return matrix, client_ids
+
+
+def plot_accuracy(history):
+    """
+    Single accuracy curve. Attack scenarios only affect diagnostic
+    contribution tracking, not aggregation, so there is only one
+    accuracy trajectory for the whole experiment.
+    """
+
+    accuracy = history["accuracy"]
+
     plt.figure()
     plt.plot(
-        np.arange(1, len(original["accuracy"]) + 1),
-        original["accuracy"],
+        np.arange(1, len(accuracy) + 1),
+        accuracy,
         marker="o",
-        label="Original LCV",
-    )
-    plt.plot(
-        np.arange(1, len(modified["accuracy"]) + 1),
-        modified["accuracy"],
-        marker="o",
-        label="Modified LCV",
     )
     plt.xlabel("Round")
     plt.ylabel("Mean test accuracy")
     plt.title("Mean accuracy over rounds")
     plt.grid(True, alpha=0.3)
-    plt.legend()
     plt.tight_layout()
     plt.show()
 
 
-def plot_final_contributions(history, title):
+def plot_final_contributions(history, scenario_name, version):
 
-    if not history.get("contributions"):
-        print("No contribution data available")
-        return
-
-    contributions = history["contributions"][-1]
-    client_ids = sorted(contributions.keys())
-
-    matrix = np.stack(
-        [np.asarray(contributions[cid], dtype=float) for cid in client_ids]
-    )
+    matrix, client_ids = get_final_matrix(history, scenario_name, version)
 
     plt.figure()
     plt.imshow(matrix, aspect="auto")
     plt.colorbar(label="Contribution")
     plt.xlabel("Contributor")
     plt.ylabel("Receiving client")
-    plt.title(title)
+    plt.title(f"Final contributions - {scenario_name} ({version})")
     plt.xticks(range(len(client_ids)), client_ids)
     plt.yticks(range(len(client_ids)), client_ids)
     plt.tight_layout()
     plt.show()
 
 
-def compare_final_contributions(original, modified):
-    original_final = original["contributions"][-1]
-    modified_final = modified["contributions"][-1]
+def compare_original_vs_modified(history, scenario_name):
+    """
+    Within one scenario, compares original vs modified contribution
+    tracking: does modified successfully suppress self-contribution
+    inflation while original does not.
+    """
 
-    client_ids = sorted(original_final.keys())
-
-    original_matrix = np.stack(
-        [np.asarray(original_final[cid], dtype=float) for cid in client_ids]
-    )
-    modified_matrix = np.stack(
-        [np.asarray(modified_final[cid], dtype=float) for cid in client_ids]
-    )
+    original_matrix, client_ids = get_final_matrix(history, scenario_name, "original")
+    modified_matrix, _ = get_final_matrix(history, scenario_name, "modified")
 
     print("\n" + "=" * 70)
-    print("DIRECT COMPARISON")
+    print(f"ORIGINAL vs MODIFIED — scenario: {scenario_name}")
     print("=" * 70)
 
     print(
-        f"Final mean accuracy - original: "
-        f"{original['accuracy'][-1]:.4f}"
-    )
-    print(
-        f"Final mean accuracy - modified: "
-        f"{modified['accuracy'][-1]:.4f}"
-    )
-    print(
-        f"Difference (modified - original): "
-        f"{modified['accuracy'][-1] - original['accuracy'][-1]:+.4f}"
-    )
-
-    print(
-        f"\nMax absolute self-contribution, original: "
+        f"Max |self-contribution|, original: "
         f"{np.max(np.abs(np.diag(original_matrix))):.6g}"
     )
     print(
-        f"Max absolute self-contribution, modified: "
+        f"Max |self-contribution|, modified: "
         f"{np.max(np.abs(np.diag(modified_matrix))):.6g}"
     )
 
-    # Compare contributor rankings for each receiver
     rank_changes = []
     for row, cid in enumerate(client_ids):
         orig_order = np.argsort(-original_matrix[row])
@@ -189,48 +176,64 @@ def compare_final_contributions(original, modified):
         f"{sum(rank_changes)}/{len(rank_changes)}"
     )
 
-    # Matrix-level summary
     diff = modified_matrix - original_matrix
-    print(
-        f"Mean absolute contribution difference: "
-        f"{np.mean(np.abs(diff)):.6f}"
-    )
-    print(
-        f"Max absolute contribution difference: "
-        f"{np.max(np.abs(diff)):.6f}"
-    )
+    print(f"Mean absolute contribution difference: {np.mean(np.abs(diff)):.6f}")
+    print(f"Max absolute contribution difference: {np.max(np.abs(diff)):.6f}")
+
+
+def compare_attack_strengths(history, attacker_id, version="original"):
+    """
+    Across the single_s1/s5/s10/s20/s50 scenarios, shows how the
+    fixed attacker's self-contribution grows with strength, under
+    a given version (original or modified).
+    """
+
+    strengths = [1, 5, 10, 20, 50]
+    scenario_names = [f"single_s{s}" for s in strengths]
+
+    self_contribs = []
+
+    for name in scenario_names:
+        matrix, client_ids = get_final_matrix(history, name, version)
+        row_idx = client_ids.index(attacker_id)
+        self_contribs.append(matrix[row_idx, row_idx])
+
+    print("\n" + "=" * 70)
+    print(f"ATTACK STRENGTH SWEEP — client {attacker_id}, version: {version}")
+    print("=" * 70)
+
+    for s, val in zip(strengths, self_contribs):
+        print(f"  strength {s:>3}: self-contribution = {val:.6f}")
+
+    plt.figure()
+    plt.plot(strengths, self_contribs, marker="o")
+    plt.xlabel("Fake LCV strength")
+    plt.ylabel("Final self-contribution")
+    plt.title(f"Self-contribution vs attack strength ({version})")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
 
 def main():
-    original = load_result(ORIGINAL_FILE)
-    modified = load_result(MODIFIED_FILE)
+    history = load_result(RESULTS_FILE)
 
-    inspect_history("ORIGINAL", original)
-    inspect_history("MODIFIED", modified)
+    inspect_history(history)
 
-    # Ensure these really are the same experiment apart from LCV method.
-    print("\n" + "=" * 70)
-    print("EXPERIMENT CONSISTENCY CHECK")
-    print("=" * 70)
+    plot_accuracy(history)
 
-    for key in ["topology", "num_clients", "rounds"]:
-        a = original.get(key)
-        b = modified.get(key)
-        print(f"{key}: {'OK' if a == b else f'MISMATCH ({a} vs {b})'}")
+    scenario_names = list(history["contributions"].keys())
 
-    plot_accuracy(original, modified)
+    for scenario_name in scenario_names:
+        for version in ["original", "modified"]:
+            plot_final_contributions(history, scenario_name, version)
 
-    plot_final_contributions(
-        original,
-        "Final contribution matrix - Original LCV"
-    )
+        compare_original_vs_modified(history, scenario_name)
 
-    plot_final_contributions(
-        modified,
-        "Final contribution matrix - Modified LCV"
-    )
+    attacker_id = history.get("single_attacker_id", 0)
 
-    compare_final_contributions(original, modified)
+    compare_attack_strengths(history, attacker_id, version="original")
+    compare_attack_strengths(history, attacker_id, version="modified")
 
 
 if __name__ == "__main__":

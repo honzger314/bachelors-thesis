@@ -117,7 +117,8 @@ class DFLSimulator:
             "single_s10":  ({self.single_attacker_id}, 10.0),
             "single_s20":  ({self.single_attacker_id}, 20.0),
             "single_s50":  ({self.single_attacker_id}, 50.0),
-            "multi_fixed": (set(self.multi_attacker_ids), 1.0),
+            "multi_2":  (set(multi_attacker_ids[:2]), 1.0),   # first 2 of the fixed set
+            "multi_3":  (set(multi_attacker_ids), 1.0),        # all 3 (rename from multi_fixed)
         }
 
         #
