@@ -15,21 +15,16 @@ class DFLSimulator:
     """
     Decentralized Federated Learning simulator.
 
-    Computes one (honest) LCV vector per client per round, then
-    fans it out to several coordinators, each representing a
-    different attack scenario:
+    This branch tests robustness of the TRIP-Shapley method itself
+    (original vs modified contribution tracking) on an alternative
+    topology (Watts-Strogatz), under the honest scenario only - no
+    attackers.
 
-        clean       - no attack
-        single_s1   - one fixed malicious client, strength 1.0
-        single_s5   - one fixed malicious client, strength 5.0
-        single_s10  - one fixed malicious client, strength 10.0
-        single_s20  - one fixed malicious client, strength 20.0
-        single_s50  - one fixed malicious client, strength 50.0
-        multi_fixed - a fixed set of malicious clients, strength 1.0
-
-    Every coordinator internally tracks both original and modified
-    (self-contribution removed) TRIP-Shapley contributions, as
-    implemented by Coordinator.update_round.
+    Computes one (honest) LCV vector per client per round, and
+    feeds it into a single coordinator, which internally tracks
+    both original and modified (self-contribution removed)
+    TRIP-Shapley contributions, as implemented by
+    Coordinator.update_round.
     """
 
     def __init__(
@@ -43,17 +38,12 @@ class DFLSimulator:
         rewire_prob=0.1,
         network_seed=None,
         device="cpu",
-        single_attacker_id=0,
-        multi_attacker_ids=None,
     ):
 
         self.num_clients = num_clients
         self.rounds = rounds
         self.local_epochs = local_epochs
         self.device = device
-
-        self.single_attacker_id = single_attacker_id
-        self.multi_attacker_ids = multi_attacker_ids or []
 
         #
         # Dataset
@@ -112,29 +102,13 @@ class DFLSimulator:
         )
 
         #
-        # Attack scenarios: name -> (malicious_ids, strength)
-        # strength=None means no corruption applied (clean)
+        # Single coordinator, tracks both original and modified
+        # contributions internally.
         #
 
-        self.scenarios = {
-            "clean":       (set(), None),
-            "single_s1":   ({self.single_attacker_id}, 1.0),
-            "single_s5":   ({self.single_attacker_id}, 5.0),
-            "single_s10":  ({self.single_attacker_id}, 10.0),
-            "single_s20":  ({self.single_attacker_id}, 20.0),
-            "single_s50":  ({self.single_attacker_id}, 50.0),
-            "multi_fixed": (set(self.multi_attacker_ids), 1.0),
-        }
-
-        #
-        # One coordinator per scenario, each handling both
-        # original and modified versions internally
-        #
-
-        self.coordinators = {
-            name: Coordinator(num_clients=num_clients)
-            for name in self.scenarios
-        }
+        self.coordinator = Coordinator(
+            num_clients=num_clients
+        )
 
         #
         # History
@@ -147,19 +121,13 @@ class DFLSimulator:
 
             "lcv_vectors": [],
 
-            "contributions": {
-                name: []
-                for name in self.scenarios
-            },
+            "contributions": [],
 
             "topology": topology,
             "average_degree": average_degree,
             "rewire_prob": rewire_prob,
             "num_clients": num_clients,
             "rounds": rounds,
-
-            "single_attacker_id": self.single_attacker_id,
-            "multi_attacker_ids": self.multi_attacker_ids,
         }
 
     def train_round(
@@ -215,7 +183,7 @@ class DFLSimulator:
             messages[client.id] = received
 
         #
-        # 3. Compute LCV once (honest, no attack applied here)
+        # 3. Compute LCV (honest, no attack)
         #
 
         print(
@@ -254,49 +222,30 @@ class DFLSimulator:
         )
 
         #
-        # 4. Update every scenario's coordinator
-        #
-        # Each scenario clones the honest lcv_dict and, if
-        # applicable, overwrites the self-entry of malicious
-        # clients with the scenario's fake strength value
-        # before propagation. Coordinator.update_round then
-        # handles the original/modified split as before.
+        # 4. Coordinator update (both original and modified)
         #
 
         print(
-            "\n--- Updating coordinators ---"
+            "\n--- Updating coordinator ---"
         )
 
-        for name, (malicious_ids, strength) in self.scenarios.items():
+        self.coordinator.update_round(
+            lcv_dict,
+            self.network
+        )
 
-            scenario_lcv_dict = {}
-
-            for cid, vec in lcv_dict.items():
-
-                v = vec.clone()
-
-                if strength is not None and cid in malicious_ids:
-                    v[cid] = strength
-
-                scenario_lcv_dict[cid] = v
-
-            self.coordinators[name].update_round(
-                scenario_lcv_dict,
-                self.network
+        self.history["contributions"].append(
+            copy.deepcopy(
+                self.coordinator.get_all_contributions()
             )
-
-            self.history["contributions"][name].append(
-                copy.deepcopy(
-                    self.coordinators[name].get_all_contributions()
-                )
-            )
+        )
 
         print(
-            "Coordinator updates complete"
+            "Coordinator update complete"
         )
 
         #
-        # 5. Aggregate models (attack-agnostic)
+        # 5. Aggregate models
         #
 
         print(

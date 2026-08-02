@@ -53,30 +53,6 @@ def main():
     torch.backends.cudnn.benchmark = False
 
 
-    # Fixed attacker configuration
-    #
-    # single_attacker_id: used for the single_s1/s5/s10/s20/s50 scenarios
-    # multi_attacker_ids: used for the multi_fixed scenario (strength 1.0)
-
-    single_attacker_id = 0
-
-    num_multi_attackers = 3
-
-    multi_attacker_ids = random.sample(
-        range(num_clients),
-        num_multi_attackers
-    )
-
-
-    print(
-        f"Single attacker id: {single_attacker_id}"
-    )
-
-    print(
-        f"Multi attacker ids (strength 1.0): {multi_attacker_ids}"
-    )
-
-
     simulator = DFLSimulator(
         num_clients=num_clients,
         rounds=rounds,
@@ -87,8 +63,6 @@ def main():
         rewire_prob=rewire_prob,
         network_seed=seed,
         device=device,
-        single_attacker_id=single_attacker_id,
-        multi_attacker_ids=multi_attacker_ids,
     )
 
 
