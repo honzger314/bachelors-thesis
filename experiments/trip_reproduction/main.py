@@ -20,7 +20,9 @@ def main():
     rounds = 20
     local_epochs = 1
     batch_size = 64
-    topology = "ring"
+    topology = "watts_strogatz"
+    average_degree = 4
+    rewire_prob = 0.1
 
 
     # Automatically use GPU if available
@@ -81,6 +83,9 @@ def main():
         local_epochs=local_epochs,
         batch_size=batch_size,
         topology=topology,
+        average_degree=average_degree,
+        rewire_prob=rewire_prob,
+        network_seed=seed,
         device=device,
         single_attacker_id=single_attacker_id,
         multi_attacker_ids=multi_attacker_ids,

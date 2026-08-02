@@ -9,7 +9,7 @@ RESULTS_DIR = Path("results")
 
 # One file now contains every scenario (clean, single_s1..s50, multi_fixed)
 # and both original/modified contribution tracking within each scenario.
-RESULTS_FILE = RESULTS_DIR / "CIFAR10_ring_10clients_20rounds_seed_1.pkl"
+RESULTS_FILE = RESULTS_DIR / "CIFAR10_watts_strogatz_10clients_20rounds_seed_1.pkl"
 
 
 def load_result(path):

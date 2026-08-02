@@ -38,7 +38,10 @@ class DFLSimulator:
         rounds=20,
         local_epochs=1,
         batch_size=64,
-        topology="ring",
+        topology="watts_strogatz",
+        average_degree=4,
+        rewire_prob=0.1,
+        network_seed=None,
         device="cpu",
         single_attacker_id=0,
         multi_attacker_ids=None,
@@ -97,12 +100,15 @@ class DFLSimulator:
             self.clients.append(client)
 
         #
-        # Network (topology preserved)
+        # Network (Watts-Strogatz on this branch)
         #
 
         self.network = Network(
             num_clients=num_clients,
-            topology=topology
+            topology=topology,
+            average_degree=average_degree,
+            rewire_prob=rewire_prob,
+            random_seed=network_seed
         )
 
         #
@@ -117,8 +123,7 @@ class DFLSimulator:
             "single_s10":  ({self.single_attacker_id}, 10.0),
             "single_s20":  ({self.single_attacker_id}, 20.0),
             "single_s50":  ({self.single_attacker_id}, 50.0),
-            "multi_2":  (set(multi_attacker_ids[:2]), 1.0),   # first 2 of the fixed set
-            "multi_3":  (set(multi_attacker_ids), 1.0),        # all 3 (rename from multi_fixed)
+            "multi_fixed": (set(self.multi_attacker_ids), 1.0),
         }
 
         #
@@ -148,6 +153,8 @@ class DFLSimulator:
             },
 
             "topology": topology,
+            "average_degree": average_degree,
+            "rewire_prob": rewire_prob,
             "num_clients": num_clients,
             "rounds": rounds,
 
