@@ -25,32 +25,15 @@ class Client:
         device="cpu",
         learning_rate=0.01,
         lcv_function=None,
-        malicious=False,
-        attack_type=None,
-        fake_lcv_value=1.0,
     ):
-
         self.id = client_id
         self.device = device
         self.train_loader = train_loader
-
-        self.malicious = malicious
-        self.attack_type = attack_type
-        self.fake_lcv_value = fake_lcv_value
-
         self.model = create_model().to(device)
-
         self.learning_rate = learning_rate
-
         self.lcv_function = lcv_function
-
-        # θ(t)
         self.pre_model = None
-
-        # θ(t+1/2)
         self.post_model = None
-
-        # Filled in later by TRIP-Shapley
         self.local_contribution_vector = None
 
     ####################################################################
@@ -161,35 +144,12 @@ class Client:
     # Placeholder for TRIP-Shapley
     ####################################################################
 
-    def compute_lcv(
-        self,
-        received_messages,
-        test_loader,
-    ):
-
-        #
-        # TRIP-Shapley:
-        # N(i,t) = neighbors + self
-        #
-        # `received_messages` already includes this client's
-        # own message (the simulator adds it before calling
-        # this method), so we must NOT append self again here.
-        #
-
+    def compute_lcv(self, received_messages, test_loader):
         messages = received_messages
-
         self.local_contribution_vector = self.lcv_function(
             client_id=self.id,
             messages=messages,
             test_loader=test_loader,
             device=self.device
         )
-        if (
-            self.malicious
-            and self.attack_type == "fake_lcv"
-        ):
-            self.local_contribution_vector[self.id] = (
-                self.fake_lcv_value
-            )
-
         return self.local_contribution_vector

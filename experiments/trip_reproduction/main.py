@@ -12,31 +12,6 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument(
-        "--attack",
-        type=str,
-        default="none",
-        choices=[
-            "none",
-            "fake_lcv"
-        ],
-        help="Attack to perform"
-    )
-
-    parser.add_argument(
-        "--malicious",
-        type=int,
-        default=0,
-        help="Number of malicious clients"
-    )
-
-    parser.add_argument(
-        "--strength",
-        type=float,
-        default=1.0,
-        help="Strength of fake LCV attack"
-    )
-
     args = parser.parse_args()
 
 
@@ -76,20 +51,27 @@ def main():
     torch.backends.cudnn.benchmark = False
 
 
-    # Randomly select malicious clients
-    if args.malicious > num_clients:
-        raise ValueError(
-            "Number of malicious clients cannot exceed number of clients"
-        )
+    # Fixed attacker configuration
+    #
+    # single_attacker_id: used for the single_s1/s5/s10/s20/s50 scenarios
+    # multi_attacker_ids: used for the multi_fixed scenario (strength 1.0)
 
-    malicious_clients = random.sample(
+    single_attacker_id = 0
+
+    num_multi_attackers = 3
+
+    multi_attacker_ids = random.sample(
         range(num_clients),
-        args.malicious
+        num_multi_attackers
     )
 
 
     print(
-        f"Malicious clients: {malicious_clients}"
+        f"Single attacker id: {single_attacker_id}"
+    )
+
+    print(
+        f"Multi attacker ids (strength 1.0): {multi_attacker_ids}"
     )
 
 
@@ -100,9 +82,8 @@ def main():
         batch_size=batch_size,
         topology=topology,
         device=device,
-        malicious_clients=malicious_clients,
-        attack_type=args.attack,
-        fake_lcv_value=args.strength
+        single_attacker_id=single_attacker_id,
+        multi_attacker_ids=multi_attacker_ids,
     )
 
 
@@ -131,9 +112,6 @@ def main():
         f"{topology}_"
         f"{num_clients}clients_"
         f"{rounds}rounds_"
-        f"attack_{args.attack}_"
-        f"malicious_{args.malicious}_"
-        f"strength_{args.strength}_"
         f"seed_{seed}.pkl"
     )
 
