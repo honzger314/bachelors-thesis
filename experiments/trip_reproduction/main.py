@@ -37,7 +37,7 @@ def main():
 
 
     # Fixed seed for reproducible experiments
-    seed = 2
+    seed = 3
 
     random.seed(seed)
     np.random.seed(seed)
