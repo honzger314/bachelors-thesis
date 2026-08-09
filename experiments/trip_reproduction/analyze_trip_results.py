@@ -3,19 +3,49 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.stats import spearmanr
 
 
 RESULTS_DIR = Path("results")
-RESULTS_FILE = RESULTS_DIR / "CIFAR10_watts_strogatz_10clients_20rounds_seed_1.pkl"
+FIGURES_DIR = Path("figures")
+FIGURES_DIR.mkdir(exist_ok=True)
+
+# --- Experiment configuration (adjust to match your actual runs) ---
+
+SEEDS = [1, 2, 3]
+
+TOPOLOGY = "watts_strogatz"
+NUM_CLIENTS = 10
+ROUNDS = 20
+
+
+def result_path(seed):
+    return RESULTS_DIR / f"CIFAR10_{TOPOLOGY}_{NUM_CLIENTS}clients_{ROUNDS}rounds_seed_{seed}.pkl"
 
 
 def load_result(path):
-    print(f"\nLoading: {path}")
+    print(f"Loading: {path}")
     if not path.exists():
-        raise FileNotFoundError(f"Could not find {path}")
+        raise FileNotFoundError(
+            f"Could not find {path}. Update SEEDS / result_path() to match "
+            f"your actual filenames."
+        )
     with open(path, "rb") as f:
         return pickle.load(f)
 
+
+def load_all_seeds():
+    histories = []
+    for seed in SEEDS:
+        h = load_result(result_path(seed))
+        print(f"  contribution snapshots: {len(h['contributions'])}")
+        histories.append(h)
+    return histories
+
+
+# ---------------------------------------------------------------------
+# Inspection (kept from the original single-file script, unchanged)
+# ---------------------------------------------------------------------
 
 def inspect_history(history):
     print("\n" + "=" * 70)
@@ -53,8 +83,7 @@ def inspect_history(history):
         print(f"Final client accuracies: {np.round(arr[-1], 4)}")
 
     if contributions:
-        # contributions[-1] -> {"original": {cid: vec}, "modified": {cid: vec}}
-        final = contributions[-1]
+        final = contributions[-1]  # {"original": {...}, "modified": {...}}
 
         for version in ["original", "modified"]:
             if version not in final:
@@ -74,44 +103,126 @@ def inspect_history(history):
             print(f"[{version}] self-contribution diagonal: {np.round(diagonal, 6)}")
             print(f"[{version}] max |self-contribution|: {np.max(np.abs(diagonal)):.6g}")
 
-            for row_idx, cid in enumerate(client_ids):
-                row = matrix[row_idx].copy()
-                top = int(np.argmax(row))
-                print(
-                    f"  Client {cid}: top contributor = {top}, "
-                    f"value = {row[top]:.6f}"
-                )
 
+# ---------------------------------------------------------------------
+# Ranking correlation (Plot 1 equivalent, adapted to flat contributions)
+# ---------------------------------------------------------------------
 
-def get_final_matrix(history, version):
+def get_round_matrix(history, version, round_idx):
+    """
+    Returns the contribution matrix for a given version
+    ("original" or "modified") and round index (0-based).
 
-    final = history["contributions"][-1][version]
-    client_ids = sorted(final.keys())
+    Unlike the ring-topology / attack-scenario branch, this branch's
+    history["contributions"] is a flat list (one entry per round),
+    not nested by scenario name.
+    """
+
+    entry = history["contributions"][round_idx][version]
+    client_ids = sorted(entry.keys())
 
     matrix = np.stack(
-        [np.asarray(final[cid], dtype=float) for cid in client_ids]
+        [np.asarray(entry[cid], dtype=float) for cid in client_ids]
     )
 
     return matrix, client_ids
 
 
-def plot_accuracy(history):
+def get_final_matrix(history, version):
+    return get_round_matrix(history, version, -1)
 
-    accuracy = history["accuracy"]
 
-    plt.figure()
-    plt.plot(
-        np.arange(1, len(accuracy) + 1),
-        accuracy,
-        marker="o",
+def spearman_per_round(history):
+    """
+    For each round, computes the Spearman correlation between the
+    original and modified contribution rows for every receiving
+    client, then averages across receivers.
+
+    Returns an array of shape (num_rounds,).
+    """
+
+    n_rounds = len(history["contributions"])
+    rhos = np.full(n_rounds, np.nan)
+
+    for r in range(n_rounds):
+
+        orig_matrix, client_ids = get_round_matrix(history, "original", r)
+        mod_matrix, _ = get_round_matrix(history, "modified", r)
+
+        row_rhos = []
+
+        for row in range(len(client_ids)):
+
+            rho, _ = spearmanr(orig_matrix[row], mod_matrix[row])
+
+            if np.isfinite(rho):
+                row_rhos.append(rho)
+
+        if row_rhos:
+            rhos[r] = np.mean(row_rhos)
+
+    return rhos
+
+
+def plot_honest_ranking_correlation(histories):
+    """
+    Spearman correlation between original and modified contribution
+    rankings, per round, averaged over seeds (mean +/- std band),
+    on the Watts-Strogatz topology.
+    """
+
+    per_seed_rhos = np.stack(
+        [spearman_per_round(h) for h in histories]
+    )  # shape (n_seeds, n_rounds)
+
+    mean_rho = np.nanmean(per_seed_rhos, axis=0)
+    std_rho = np.nanstd(per_seed_rhos, axis=0)
+
+    rounds = np.arange(1, per_seed_rhos.shape[1] + 1)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    ax.plot(rounds, mean_rho, marker="o", color="C0", label=r"$\rho_t$")
+    ax.fill_between(
+        rounds,
+        mean_rho - std_rho,
+        mean_rho + std_rho,
+        color="C0",
+        alpha=0.2,
+        label="±1 std (seeds)",
     )
-    plt.xlabel("Round")
-    plt.ylabel("Mean test accuracy")
-    plt.title("Mean accuracy over rounds (Watts-Strogatz, honest)")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
 
+    ax.set_xlabel("Communication round $t$")
+    ax.set_ylabel(r"Spearman correlation $\rho_t$")
+    ax.set_title(
+        "Honest scenario, Watts-Strogatz: ranking correlation\n"
+        "(Original vs. Modified TRIP-Shapley)"
+    )
+
+    # Zoom into the observed range instead of the full [-1, 1] scale,
+    # with a small padding so points don't sit flush on the axes.
+    y_min = np.nanmin(mean_rho - std_rho)
+    y_max = np.nanmax(mean_rho + std_rho)
+    padding = max(0.02, 0.1 * (y_max - y_min))
+    ax.set_ylim(
+        max(-1.0, y_min - padding),
+        min(1.0, y_max + padding),
+    )
+
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "plot1_watts_strogatz_ranking_correlation.pdf")
+    fig.savefig(FIGURES_DIR / "plot1_watts_strogatz_ranking_correlation.png", dpi=200)
+    plt.close(fig)
+
+    print(f"\nPlot 1 (Watts-Strogatz) saved. Final-round mean rho: {mean_rho[-1]:.4f} (+/- {std_rho[-1]:.4f})")
+
+
+# ---------------------------------------------------------------------
+# Final-round diagnostics (kept from the original single-file script)
+# ---------------------------------------------------------------------
 
 def plot_final_contributions(history, version):
 
@@ -135,7 +246,7 @@ def compare_original_vs_modified(history):
     modified_matrix, _ = get_final_matrix(history, "modified")
 
     print("\n" + "=" * 70)
-    print("ORIGINAL vs MODIFIED (Watts-Strogatz, honest)")
+    print("ORIGINAL vs MODIFIED (Watts-Strogatz, honest, single seed)")
     print("=" * 70)
 
     print(
@@ -165,16 +276,26 @@ def compare_original_vs_modified(history):
 
 
 def main():
-    history = load_result(RESULTS_FILE)
 
-    inspect_history(history)
+    plt.rcParams.update({
+        "font.size": 11,
+        "axes.titlesize": 12,
+    })
 
-    plot_accuracy(history)
+    histories = load_all_seeds()
 
-    plot_final_contributions(history, "original")
-    plot_final_contributions(history, "modified")
+    # Detailed single-seed inspection uses the first seed only.
+    inspect_history(histories[0])
 
-    compare_original_vs_modified(history)
+    # Multi-seed plot (this branch's equivalent of Plot 1).
+    plot_honest_ranking_correlation(histories)
+
+    # Single-seed diagnostics, first seed only.
+    plot_final_contributions(histories[0], "original")
+    plot_final_contributions(histories[0], "modified")
+    compare_original_vs_modified(histories[0])
+
+    print(f"\nAll figures saved to: {FIGURES_DIR.resolve()}")
 
 
 if __name__ == "__main__":
