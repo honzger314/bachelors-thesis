@@ -19,9 +19,22 @@ class DFLSimulator:
     then creates manipulated reports for different attack scenarios.
 
     Coordinators track:
-        - original: no defense
-        - modified: self-contribution removed
-        - audited: probabilistic + outlier-triggered verification
+
+        original:
+            No defense. Propagates the reported LCV unchanged.
+
+        modified:
+            Baseline defense. Removes the client's own contribution
+            before propagation.
+
+        audited:
+            Probabilistic + outlier-triggered verification.
+
+    IMPORTANT:
+        The ground-truth LCV is available to the simulator because
+        this is an experimental simulation. In the actual protocol,
+        the coordinator would recompute the LCV from the exchanged
+        models when an audit is triggered.
     """
 
     def __init__(
@@ -35,9 +48,7 @@ class DFLSimulator:
         single_attacker_id=0,
         multi_attacker_ids=None,
 
-        # ---------------------------------------------------------
-        # New defense parameters
-        # ---------------------------------------------------------
+        # Defense parameters
         audit_probability=0.1,
         audit_threshold=0.001,
         outlier_threshold=0.01,
@@ -58,9 +69,9 @@ class DFLSimulator:
         self.outlier_threshold = outlier_threshold
         self.seed = seed
 
-        #
+        # ---------------------------------------------------------
         # Dataset
-        #
+        # ---------------------------------------------------------
 
         client_loaders, test_loader = create_client_loaders(
             num_clients=num_clients,
@@ -69,15 +80,15 @@ class DFLSimulator:
 
         self.test_loader = test_loader
 
-        #
+        # ---------------------------------------------------------
         # LCV function
-        #
+        # ---------------------------------------------------------
 
         lcv_function = compute_lcv
 
-        #
+        # ---------------------------------------------------------
         # Create synchronized clients
-        #
+        # ---------------------------------------------------------
 
         self.clients = []
 
@@ -96,26 +107,25 @@ class DFLSimulator:
                 lcv_function=lcv_function,
             )
 
-            client.model.load_state_dict(
-                global_state
-            )
+            client.model.load_state_dict(global_state)
 
             self.clients.append(client)
 
-        #
+        # ---------------------------------------------------------
         # Network
-        #
+        # ---------------------------------------------------------
 
         self.network = Network(
             num_clients=num_clients,
             topology=topology
         )
 
-        #
+        # ---------------------------------------------------------
         # Attack scenarios
-        #
+        # ---------------------------------------------------------
 
         self.scenarios = {
+
             "clean": (
                 set(),
                 None
@@ -157,26 +167,28 @@ class DFLSimulator:
             ),
         }
 
-        #
+        # ---------------------------------------------------------
         # Coordinators
+        # ---------------------------------------------------------
+        #
+        # Give each coordinator a different seed so that the
+        # random audit decisions are independent between scenarios.
         #
 
-        self.coordinators = {
-            name: Coordinator(
+        self.coordinators = {}
+
+        for scenario_index, name in enumerate(self.scenarios):
+
+            self.coordinators[name] = Coordinator(
                 num_clients=num_clients,
-
                 audit_probability=audit_probability,
-                audit_threshold=audit_threshold,
                 outlier_threshold=outlier_threshold,
-
                 seed=seed,
             )
-            for name in self.scenarios
-        }
 
-        #
+        # ---------------------------------------------------------
         # History
-        #
+        # ---------------------------------------------------------
 
         self.history = {
 
@@ -216,9 +228,9 @@ class DFLSimulator:
         print(f"Starting round {round_number + 1}")
         print("======================")
 
-        #
+        # =========================================================
         # 1. Local training
-        #
+        # =========================================================
 
         print("\n--- Local training ---")
 
@@ -233,9 +245,9 @@ class DFLSimulator:
                 epochs=self.local_epochs
             )
 
-        #
+        # =========================================================
         # 2. Exchange messages
-        #
+        # =========================================================
 
         print("\n--- Creating messages ---")
 
@@ -245,10 +257,12 @@ class DFLSimulator:
 
             received = []
 
+            # Own model
             received.append(
                 client.create_message()
             )
 
+            # Neighbor models
             for neighbor in self.network.neighbors(
                 client.id
             ):
@@ -259,15 +273,13 @@ class DFLSimulator:
 
             messages[client.id] = received
 
-        #
+        # =========================================================
         # 3. Compute ground-truth LCV
-        #
-        # This is the value that the coordinator would independently
-        # reproduce during an audit.
-        #
+        # =========================================================
 
         print(
-            "\n--- Computing Ground-Truth Local Contribution Vectors ---"
+            "\n--- Computing Ground-Truth "
+            "Local Contribution Vectors ---"
         )
 
         ground_truth_lcv_dict = {}
@@ -300,21 +312,19 @@ class DFLSimulator:
             copy.deepcopy(ground_truth_lcv_dict)
         )
 
-        #
-        # 4. Update every scenario
-        #
+        # =========================================================
+        # 4. Update every attack scenario
+        # =========================================================
 
-        print(
-            "\n--- Updating coordinators ---"
-        )
+        print("\n--- Updating coordinators ---")
 
         for name, (malicious_ids, strength) in self.scenarios.items():
 
+            # -----------------------------------------------------
+            # Ground truth
+            # -----------------------------------------------------
             #
-            # Ground truth is NEVER modified.
-            #
-            # This represents what the coordinator would obtain
-            # by recomputing the LCV during an audit.
+            # Never modify this copy.
             #
 
             ground_truth = {
@@ -322,9 +332,9 @@ class DFLSimulator:
                 for cid, vec in ground_truth_lcv_dict.items()
             }
 
-            #
-            # Construct what clients actually report.
-            #
+            # -----------------------------------------------------
+            # Construct malicious reports
+            # -----------------------------------------------------
 
             reported = {}
 
@@ -334,28 +344,35 @@ class DFLSimulator:
 
                 if strength is not None and cid in malicious_ids:
 
-                    #
                     # Current attack:
-                    # manipulate own contribution.
-                    #
+                    # malicious client inflates its own LCV.
                     v[cid] = strength
 
                 reported[cid] = v
 
+            # -----------------------------------------------------
+            # Expected LCV for outlier detection
+            # -----------------------------------------------------
             #
-            # Expected LCV for outlier detection.
+            # TEMPORARY EXPERIMENTAL VERSION:
             #
-            # For now we use the ground-truth LCV itself.
+            # We use the ground-truth LCV as the expected value.
             #
-            # This means:
+            # This gives us a clean test of the complete defense:
             #
-            #     obvious deviation -> mandatory audit
+            # reported LCV
+            #       ↓
+            # outlier detection
+            #       ↓
+            # audit
+            #       ↓
+            # recompute/correct
+            #       ↓
+            # zero malicious reward
             #
-            #     otherwise -> random audit
-            #
-            # In a real protocol this "expected" value would need
-            # to be derived from information available to the
-            # coordinator without trusting the report.
+            # In the final protocol this must be replaced by an
+            # estimate available to the coordinator without
+            # trusting the client's report.
             #
 
             expected = {
@@ -363,9 +380,9 @@ class DFLSimulator:
                 for cid, vec in ground_truth_lcv_dict.items()
             }
 
-            #
+            # -----------------------------------------------------
             # Run coordinator
-            #
+            # -----------------------------------------------------
 
             self.coordinators[name].update_round(
                 ground_truth_lcv_dict=ground_truth,
@@ -374,9 +391,9 @@ class DFLSimulator:
                 expected_lcv_dict=expected,
             )
 
-            #
+            # -----------------------------------------------------
             # Save contribution history
-            #
+            # -----------------------------------------------------
 
             self.history["contributions"][name].append(
                 copy.deepcopy(
@@ -384,9 +401,9 @@ class DFLSimulator:
                 )
             )
 
-            #
+            # -----------------------------------------------------
             # Save audit history
-            #
+            # -----------------------------------------------------
 
             self.history["audit_logs"][name].append(
                 copy.deepcopy(
@@ -394,17 +411,22 @@ class DFLSimulator:
                 )
             )
 
-        print(
-            "Coordinator updates complete"
-        )
+        print("Coordinator updates complete")
 
-        #
+        # =========================================================
         # 5. Aggregate models
+        # =========================================================
+        #
+        # IMPORTANT:
+        #
+        # The current experiments attack the LCV reports only.
+        # Therefore model aggregation remains unchanged.
+        #
+        # The audited contribution vectors are being evaluated as
+        # the defense signal, not yet used to modify aggregation.
         #
 
-        print(
-            "\n--- Model aggregation ---"
-        )
+        print("\n--- Model aggregation ---")
 
         for client in self.clients:
 
@@ -480,4 +502,5 @@ class DFLSimulator:
         return self.clients
 
     def get_history(self):
+
         return self.history
