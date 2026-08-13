@@ -183,7 +183,7 @@ class DFLSimulator:
                 num_clients=num_clients,
                 audit_probability=audit_probability,
                 outlier_threshold=outlier_threshold,
-                seed=seed,
+                seed=seed + scenario_index,
             )
 
         # ---------------------------------------------------------
