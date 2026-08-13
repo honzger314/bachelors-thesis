@@ -219,6 +219,32 @@ def plot_honest_ranking_correlation(histories):
 
     print(f"\nPlot 1 (Watts-Strogatz) saved. Final-round mean rho: {mean_rho[-1]:.4f} (+/- {std_rho[-1]:.4f})")
 
+    # Overall summary across the whole trajectory: all rounds and
+    # all seeds pooled into one distribution, not just the final
+    # round. Useful as a single number to cite in text.
+    all_values = per_seed_rhos[np.isfinite(per_seed_rhos)]
+    overall_mean = float(np.mean(all_values))
+    overall_std = float(np.std(all_values))
+
+    print(
+        f"Overall (all {per_seed_rhos.shape[1]} rounds x "
+        f"{per_seed_rhos.shape[0]} seeds pooled): "
+        f"mean rho = {overall_mean:.4f} (+/- {overall_std:.4f})"
+    )
+
+    # Round 1 is a known outlier (contribution vectors are still
+    # mostly zero-filled at that point), so also report the same
+    # summary excluding it, for reference.
+    if per_seed_rhos.shape[1] > 1:
+        excl_r1 = per_seed_rhos[:, 1:]
+        excl_r1_values = excl_r1[np.isfinite(excl_r1)]
+        excl_mean = float(np.mean(excl_r1_values))
+        excl_std = float(np.std(excl_r1_values))
+        print(
+            f"Overall excluding round 1: "
+            f"mean rho = {excl_mean:.4f} (+/- {excl_std:.4f})"
+        )
+
 
 # ---------------------------------------------------------------------
 # Final-round diagnostics (kept from the original single-file script)
