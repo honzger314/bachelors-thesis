@@ -375,11 +375,6 @@ class DFLSimulator:
             # trusting the client's report.
             #
 
-            expected = {
-                cid: vec.clone()
-                for cid, vec in ground_truth_lcv_dict.items()
-            }
-
             # -----------------------------------------------------
             # Run coordinator
             # -----------------------------------------------------
@@ -388,7 +383,6 @@ class DFLSimulator:
                 ground_truth_lcv_dict=ground_truth,
                 reported_lcv_dict=reported,
                 network=self.network,
-                expected_lcv_dict=expected,
             )
 
             # -----------------------------------------------------
