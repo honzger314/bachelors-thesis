@@ -15,21 +15,13 @@ class DFLSimulator:
     """
     Decentralized Federated Learning simulator.
 
-    Computes one (honest) LCV vector per client per round, then
-    fans it out to several coordinators, each representing a
-    different attack scenario:
+    Computes one ground-truth LCV vector per client per round,
+    then creates manipulated reports for different attack scenarios.
 
-        clean       - no attack
-        single_s1   - one fixed malicious client, strength 1.0
-        single_s5   - one fixed malicious client, strength 5.0
-        single_s10  - one fixed malicious client, strength 10.0
-        single_s20  - one fixed malicious client, strength 20.0
-        single_s50  - one fixed malicious client, strength 50.0
-        multi_fixed - a fixed set of malicious clients, strength 1.0
-
-    Every coordinator internally tracks both original and modified
-    (self-contribution removed) TRIP-Shapley contributions, as
-    implemented by Coordinator.update_round.
+    Coordinators track:
+        - original: no defense
+        - modified: self-contribution removed
+        - audited: probabilistic + outlier-triggered verification
     """
 
     def __init__(
@@ -42,6 +34,14 @@ class DFLSimulator:
         device="cpu",
         single_attacker_id=0,
         multi_attacker_ids=None,
+
+        # ---------------------------------------------------------
+        # New defense parameters
+        # ---------------------------------------------------------
+        audit_probability=0.1,
+        audit_threshold=0.001,
+        outlier_threshold=0.01,
+        seed=42,
     ):
 
         self.num_clients = num_clients
@@ -51,6 +51,12 @@ class DFLSimulator:
 
         self.single_attacker_id = single_attacker_id
         self.multi_attacker_ids = multi_attacker_ids or []
+
+        # Defense parameters
+        self.audit_probability = audit_probability
+        self.audit_threshold = audit_threshold
+        self.outlier_threshold = outlier_threshold
+        self.seed = seed
 
         #
         # Dataset
@@ -64,7 +70,7 @@ class DFLSimulator:
         self.test_loader = test_loader
 
         #
-        # LCV function (always the honest Shapley computation)
+        # LCV function
         #
 
         lcv_function = compute_lcv
@@ -97,7 +103,7 @@ class DFLSimulator:
             self.clients.append(client)
 
         #
-        # Network (topology preserved)
+        # Network
         #
 
         self.network = Network(
@@ -106,28 +112,65 @@ class DFLSimulator:
         )
 
         #
-        # Attack scenarios: name -> (malicious_ids, strength)
-        # strength=None means no corruption applied (clean)
+        # Attack scenarios
         #
 
         self.scenarios = {
-            "clean":       (set(), None),
-            "single_s1":   ({self.single_attacker_id}, 1.0),
-            "single_s5":   ({self.single_attacker_id}, 5.0),
-            "single_s10":  ({self.single_attacker_id}, 10.0),
-            "single_s20":  ({self.single_attacker_id}, 20.0),
-            "single_s50":  ({self.single_attacker_id}, 50.0),
-            "multi_2":  (set(multi_attacker_ids[:2]), 1.0),   # first 2 of the fixed set
-            "multi_3":  (set(multi_attacker_ids), 1.0),        # all 3 (rename from multi_fixed)
+            "clean": (
+                set(),
+                None
+            ),
+
+            "single_s1": (
+                {self.single_attacker_id},
+                1.0
+            ),
+
+            "single_s5": (
+                {self.single_attacker_id},
+                5.0
+            ),
+
+            "single_s10": (
+                {self.single_attacker_id},
+                10.0
+            ),
+
+            "single_s20": (
+                {self.single_attacker_id},
+                20.0
+            ),
+
+            "single_s50": (
+                {self.single_attacker_id},
+                50.0
+            ),
+
+            "multi_2": (
+                set(self.multi_attacker_ids[:2]),
+                1.0
+            ),
+
+            "multi_3": (
+                set(self.multi_attacker_ids),
+                1.0
+            ),
         }
 
         #
-        # One coordinator per scenario, each handling both
-        # original and modified versions internally
+        # Coordinators
         #
 
         self.coordinators = {
-            name: Coordinator(num_clients=num_clients)
+            name: Coordinator(
+                num_clients=num_clients,
+
+                audit_probability=audit_probability,
+                audit_threshold=audit_threshold,
+                outlier_threshold=outlier_threshold,
+
+                seed=seed,
+            )
             for name in self.scenarios
         }
 
@@ -140,9 +183,17 @@ class DFLSimulator:
             "accuracy": [],
             "client_accuracy": [],
 
+            # Ground-truth LCVs
             "lcv_vectors": [],
 
+            # Contributions for each attack scenario
             "contributions": {
+                name: []
+                for name in self.scenarios
+            },
+
+            # Audit information
+            "audit_logs": {
                 name: []
                 for name in self.scenarios
             },
@@ -153,12 +204,13 @@ class DFLSimulator:
 
             "single_attacker_id": self.single_attacker_id,
             "multi_attacker_ids": self.multi_attacker_ids,
+
+            "audit_probability": audit_probability,
+            "audit_threshold": audit_threshold,
+            "outlier_threshold": outlier_threshold,
         }
 
-    def train_round(
-        self,
-        round_number
-    ):
+    def train_round(self, round_number):
 
         print("\n======================")
         print(f"Starting round {round_number + 1}")
@@ -208,14 +260,17 @@ class DFLSimulator:
             messages[client.id] = received
 
         #
-        # 3. Compute LCV once (honest, no attack applied here)
+        # 3. Compute ground-truth LCV
+        #
+        # This is the value that the coordinator would independently
+        # reproduce during an audit.
         #
 
         print(
-            "\n--- Computing Local Contribution Vectors ---"
+            "\n--- Computing Ground-Truth Local Contribution Vectors ---"
         )
 
-        lcv_dict = {}
+        ground_truth_lcv_dict = {}
 
         for client in self.clients:
 
@@ -237,23 +292,16 @@ class DFLSimulator:
             )
 
             for cid, value in lcv.items():
-
                 vector[cid] = value
 
-            lcv_dict[client.id] = vector
+            ground_truth_lcv_dict[client.id] = vector
 
         self.history["lcv_vectors"].append(
-            copy.deepcopy(lcv_dict)
+            copy.deepcopy(ground_truth_lcv_dict)
         )
 
         #
-        # 4. Update every scenario's coordinator
-        #
-        # Each scenario clones the honest lcv_dict and, if
-        # applicable, overwrites the self-entry of malicious
-        # clients with the scenario's fake strength value
-        # before propagation. Coordinator.update_round then
-        # handles the original/modified split as before.
+        # 4. Update every scenario
         #
 
         print(
@@ -262,25 +310,87 @@ class DFLSimulator:
 
         for name, (malicious_ids, strength) in self.scenarios.items():
 
-            scenario_lcv_dict = {}
+            #
+            # Ground truth is NEVER modified.
+            #
+            # This represents what the coordinator would obtain
+            # by recomputing the LCV during an audit.
+            #
 
-            for cid, vec in lcv_dict.items():
+            ground_truth = {
+                cid: vec.clone()
+                for cid, vec in ground_truth_lcv_dict.items()
+            }
+
+            #
+            # Construct what clients actually report.
+            #
+
+            reported = {}
+
+            for cid, vec in ground_truth_lcv_dict.items():
 
                 v = vec.clone()
 
                 if strength is not None and cid in malicious_ids:
+
+                    #
+                    # Current attack:
+                    # manipulate own contribution.
+                    #
                     v[cid] = strength
 
-                scenario_lcv_dict[cid] = v
+                reported[cid] = v
+
+            #
+            # Expected LCV for outlier detection.
+            #
+            # For now we use the ground-truth LCV itself.
+            #
+            # This means:
+            #
+            #     obvious deviation -> mandatory audit
+            #
+            #     otherwise -> random audit
+            #
+            # In a real protocol this "expected" value would need
+            # to be derived from information available to the
+            # coordinator without trusting the report.
+            #
+
+            expected = {
+                cid: vec.clone()
+                for cid, vec in ground_truth_lcv_dict.items()
+            }
+
+            #
+            # Run coordinator
+            #
 
             self.coordinators[name].update_round(
-                scenario_lcv_dict,
-                self.network
+                ground_truth_lcv_dict=ground_truth,
+                reported_lcv_dict=reported,
+                network=self.network,
+                expected_lcv_dict=expected,
             )
+
+            #
+            # Save contribution history
+            #
 
             self.history["contributions"][name].append(
                 copy.deepcopy(
                     self.coordinators[name].get_all_contributions()
+                )
+            )
+
+            #
+            # Save audit history
+            #
+
+            self.history["audit_logs"][name].append(
+                copy.deepcopy(
+                    self.coordinators[name].get_audit_log()[-1]
                 )
             )
 
@@ -289,7 +399,7 @@ class DFLSimulator:
         )
 
         #
-        # 5. Aggregate models (attack-agnostic)
+        # 5. Aggregate models
         #
 
         print(
@@ -345,9 +455,10 @@ class DFLSimulator:
 
             accuracies = self.evaluate()
 
-            mean_accuracy = sum(
-                accuracies
-            ) / len(accuracies)
+            mean_accuracy = (
+                sum(accuracies)
+                / len(accuracies)
+            )
 
             self.history["client_accuracy"].append(
                 accuracies
@@ -358,7 +469,7 @@ class DFLSimulator:
             )
 
             print(
-                f"Round {r+1}/{self.rounds} "
+                f"Round {r + 1}/{self.rounds} "
                 f"| Mean accuracy: {mean_accuracy:.4f}"
             )
 
@@ -369,5 +480,4 @@ class DFLSimulator:
         return self.clients
 
     def get_history(self):
-
         return self.history

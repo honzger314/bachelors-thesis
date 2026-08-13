@@ -47,7 +47,6 @@ def load_cifar10(
     return train_dataset, test_dataset
 
 
-
 def split_dataset(
     dataset,
     num_clients,
@@ -70,12 +69,9 @@ def split_dataset(
         generator=generator
     ).tolist()
 
-
     split_size = total_size // num_clients
 
-
     client_datasets = []
-
 
     for i in range(num_clients):
 
@@ -86,23 +82,18 @@ def split_dataset(
         else:
             end = (i + 1) * split_size
 
-
         client_indices = indices[start:end]
-
 
         client_dataset = Subset(
             dataset,
             client_indices
         )
 
-
         client_datasets.append(
             client_dataset
         )
 
-
     return client_datasets
-
 
 
 def create_client_loaders(
@@ -112,24 +103,16 @@ def create_client_loaders(
     seed=42
 ):
     """
-    Creates CIFAR-10 dataloaders for clients.
+    Creates deterministic CIFAR-10 dataloaders for clients.
 
     Returns:
-
-    [
-        client0_loader,
-        client1_loader,
-        ...
-    ]
-
-    and shared test loader.
+        client_loaders
+        test_loader
     """
-
 
     train_dataset, test_dataset = load_cifar10(
         data_path
     )
-
 
     client_datasets = split_dataset(
         train_dataset,
@@ -137,28 +120,29 @@ def create_client_loaders(
         seed
     )
 
-
     client_loaders = []
 
+    for i, dataset in enumerate(client_datasets):
 
-    for dataset in client_datasets:
+        # Give each client its own deterministic generator.
+        generator = torch.Generator()
+        generator.manual_seed(seed + i)
 
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=True
+            shuffle=True,
+            generator=generator
         )
 
         client_loaders.append(
             loader
         )
 
-
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False
     )
-
 
     return client_loaders, test_loader
