@@ -10,54 +10,98 @@ class Coordinator:
     Tracks three versions:
 
         original:
-            No defense. Reported LCVs are propagated unchanged.
+            No defense.
+            Propagates the reported LCV unchanged.
 
         modified:
-            Baseline from the previous implementation. The client's
-            own contribution is always removed.
+            Baseline defense.
+            Removes the client's own contribution before propagation.
 
         audited:
             Proposed defense.
 
-            1. Collect all reported LCVs.
-            2. Estimate the normal contribution of every client from
-               the reports of the other clients.
-            3. Detect reports that are sufficiently inconsistent
-               with these estimates.
-            4. Force suspicious reports to be audited.
-            5. Additionally audit random reports with probability p.
-            6. If an audited report is dishonest:
-                   - recompute/correct it using the ground-truth LCV;
+            1. Collect reported LCVs.
+            2. Optionally detect suspicious reports using the
+               outlier heuristic.
+            3. Force suspicious reports to be audited.
+            4. Additionally audit random reports with probability p.
+            5. If an audited report is dishonest:
+                   - replace it with the ground-truth LCV;
                    - remove the attacker's reward for this round.
-            7. If the report is honest, keep it unchanged.
+            6. If the report is honest, keep it unchanged.
 
+    Parameters
+    ----------
+    num_clients:
+        Number of clients in the DFL network.
+
+    audit_probability:
+        Probability p of a random audit.
+
+    outlier_threshold:
+        Threshold used by the heuristic outlier detector.
+
+        None:
+            Disable outlier detection entirely.
+
+        Otherwise:
+            A report is considered suspicious if at least one
+            reported contribution differs from the robust estimated
+            normal contribution by more than this threshold.
+
+    seed:
+        Random seed for probabilistic auditing.
+
+    Notes
+    -----
     The ground-truth LCV is supplied directly by the simulator.
     This is a simulation shortcut. In the real protocol, the
-    coordinator would recompute the LCV from the exchanged models
-    during an audit.
+    coordinator would recompute the LCV from exchanged models
+    when an audit is triggered.
     """
 
     def __init__(
         self,
         num_clients,
         audit_probability=0.0,
-        outlier_threshold=0.001,
+        outlier_threshold=None,
         seed=None,
     ):
+
         self.num_clients = num_clients
 
-        # Probability of a random audit.
-        self.audit_probability = audit_probability
+        # -----------------------------------------------------
+        # Defense parameters
+        # -----------------------------------------------------
 
-        # Maximum tolerated deviation from the estimated normal
-        # contribution before a report becomes an outlier.
+        self.audit_probability = audit_probability
         self.outlier_threshold = outlier_threshold
 
+        # Validate audit probability.
+        if not 0.0 <= audit_probability <= 1.0:
+            raise ValueError(
+                "audit_probability must be between 0 and 1."
+            )
+
+        # Validate outlier threshold.
+        #
+        # None is explicitly allowed because it means:
+        # "disable the heuristic".
+        #
+        if outlier_threshold is not None:
+
+            if outlier_threshold < 0.0:
+                raise ValueError(
+                    "outlier_threshold must be non-negative "
+                    "or None."
+                )
+
+        # Independent RNG for this coordinator.
         self.rng = random.Random(seed)
 
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
         # Contribution states
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
 
         self.original_contributions = {
             i: torch.zeros(num_clients)
@@ -74,18 +118,21 @@ class Coordinator:
             for i in range(num_clients)
         }
 
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
         # Audit history
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
 
         self.audit_log = []
 
-        # History of estimated "normal" contributions.
+        # -----------------------------------------------------
+        # Outlier detection history
+        # -----------------------------------------------------
+
         self.outlier_history = []
 
-    # =============================================================
+    # =========================================================
     # Contribution propagation
-    # =============================================================
+    # =========================================================
 
     def update_single(
         self,
@@ -99,53 +146,63 @@ class Coordinator:
         """
 
         neighbors = network.neighbors(client_id)
-        participants = [client_id] + list(neighbors)
+
+        participants = [
+            client_id
+        ] + list(neighbors)
 
         weights = network.get_weights(client_id)
 
-        propagated = torch.zeros(self.num_clients)
+        propagated = torch.zeros(
+            self.num_clients
+        )
+
         total_weight = 0.0
 
         for p in participants:
+
             w = weights[p]
 
-            propagated += w * contribution_state[p]
+            propagated += (
+                w * contribution_state[p]
+            )
+
             total_weight += w
 
         if total_weight > 0:
+
             propagated /= total_weight
 
-        return propagated + local_contribution_vector
+        return (
+            propagated
+            + local_contribution_vector
+        )
 
-    # =============================================================
-    # TRIP-Shapley-style outlier detection
-    # =============================================================
+    # =========================================================
+    # Robust contribution estimation
+    # =========================================================
 
     def _estimate_normal_contributions(
         self,
         reported_lcv_dict,
     ):
         """
-        Estimate the normal contribution of every client.
+        Estimate a normal contribution for every client.
 
-        For client j, we collect all reported LCV entries that
-        correspond to j.
+        For target client j, collect all non-zero reported
+        contributions to j and use their median.
 
-        Honest clients should report approximately the same
-        contribution for j. Therefore, the median is used as a
-        robust estimate of the underlying contribution.
+        The median is robust against a small number of malicious
+        reports.
 
-        The median is deliberately used instead of the mean:
-        a small number of malicious reports cannot move the
-        estimate as easily.
+        Returns
+        -------
+        estimated_contributions:
+            Tensor of shape [num_clients].
 
-        Returns:
-            estimated_contributions:
-                Tensor of shape [num_clients].
-
-            values_by_target:
-                Dictionary containing all observed reports for
-                every target client.
+        values_by_target:
+            Dictionary containing observed values for each
+            target client.
         """
 
         values_by_target = {
@@ -153,42 +210,67 @@ class Coordinator:
             for j in range(self.num_clients)
         }
 
-        # ---------------------------------------------------------
-        # Collect every reported contribution.
-        #
-        # Only non-zero entries are considered, matching the
-        # sparse nature of LCV reports in TRIP-Shapley.
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
+        # Collect reports.
+        # -----------------------------------------------------
 
-        for reporter_id, lcv in reported_lcv_dict.items():
+        for reporter_id, lcv in (
+            reported_lcv_dict.items()
+        ):
 
-            for target_id in range(self.num_clients):
+            for target_id in range(
+                self.num_clients
+            ):
 
-                value = float(lcv[target_id])
+                value = float(
+                    lcv[target_id]
+                )
 
+                # Ignore absent sparse entries.
                 if value != 0.0:
-                    values_by_target[target_id].append(value)
 
-        # ---------------------------------------------------------
-        # Robust estimate for every target.
-        # ---------------------------------------------------------
+                    values_by_target[
+                        target_id
+                    ].append(value)
 
-        estimated = torch.zeros(self.num_clients)
+        # -----------------------------------------------------
+        # Robust estimate.
+        # -----------------------------------------------------
 
-        for target_id in range(self.num_clients):
+        estimated = torch.zeros(
+            self.num_clients
+        )
 
-            values = values_by_target[target_id]
+        for target_id in range(
+            self.num_clients
+        ):
+
+            values = values_by_target[
+                target_id
+            ]
 
             if len(values) == 0:
                 continue
 
-            tensor_values = torch.tensor(values)
-
-            estimated[target_id] = torch.median(
-                tensor_values
+            tensor_values = torch.tensor(
+                values,
+                dtype=torch.float32
             )
 
-        return estimated, values_by_target
+            estimated[target_id] = (
+                torch.median(
+                    tensor_values
+                )
+            )
+
+        return (
+            estimated,
+            values_by_target
+        )
+
+    # =========================================================
+    # Outlier detection
+    # =========================================================
 
     def _detect_outliers(
         self,
@@ -197,37 +279,93 @@ class Coordinator:
         """
         Detect suspicious LCV reports.
 
-        For each reported LCV entry:
+        If outlier_threshold is None, the heuristic is completely
+        disabled.
+
+        In that case:
+
+            client_outliers = False
+            entry_outliers = False
+            max_deviations = 0.0
+
+        for every client.
+
+        Otherwise, for every non-zero reported entry:
 
             deviation =
-                |reported value - estimated normal value|
+                |reported - estimated_normal|
 
-        If the deviation exceeds `outlier_threshold`, that
-        particular entry is considered suspicious.
+        A client becomes an outlier if at least one entry exceeds
+        the configured threshold.
 
-        A client becomes an outlier if at least one of its reported
-        entries is suspicious.
+        Returns
+        -------
+        client_outliers:
+            {client_id: bool}
 
-        Returns:
-
-            client_outliers:
-                {
-                    client_id: bool
-                }
-
-            entry_outliers:
-                {
-                    client_id: {
+        entry_outliers:
+            {
+                client_id:
+                    {
                         target_id: bool
                     }
-                }
+            }
 
-            estimated_contributions:
-                Robust estimate for every target client.
+        estimated_contributions:
+            Robust estimated contribution vector.
 
-            max_deviations:
-                Maximum deviation observed for every reporting client.
+        max_deviations:
+            Maximum deviation for every reporting client.
         """
+
+        # =====================================================
+        # IMPORTANT:
+        #
+        # None means:
+        #     NO HEURISTIC
+        #
+        # We return immediately and do not perform any
+        # contribution estimation or outlier comparisons.
+        # =====================================================
+
+        if self.outlier_threshold is None:
+
+            client_outliers = {
+                client_id: False
+                for client_id in reported_lcv_dict
+            }
+
+            entry_outliers = {
+                client_id: {
+                    target_id: False
+                    for target_id in range(
+                        self.num_clients
+                    )
+                }
+                for client_id in reported_lcv_dict
+            }
+
+            max_deviations = {
+                client_id: 0.0
+                for client_id in reported_lcv_dict
+            }
+
+            # There is no estimated contribution because
+            # the heuristic was not run.
+            estimated_contributions = torch.zeros(
+                self.num_clients
+            )
+
+            return (
+                client_outliers,
+                entry_outliers,
+                estimated_contributions,
+                max_deviations,
+            )
+
+        # =====================================================
+        # Heuristic enabled
+        # =====================================================
 
         (
             estimated_contributions,
@@ -240,35 +378,56 @@ class Coordinator:
         entry_outliers = {}
         max_deviations = {}
 
-        for reporter_id, lcv in reported_lcv_dict.items():
+        # -----------------------------------------------------
+        # Check every report.
+        # -----------------------------------------------------
 
-            entry_outliers[reporter_id] = {}
+        for reporter_id, lcv in (
+            reported_lcv_dict.items()
+        ):
+
+            entry_outliers[
+                reporter_id
+            ] = {}
 
             max_deviation = 0.0
             client_is_outlier = False
 
-            for target_id in range(self.num_clients):
+            for target_id in range(
+                self.num_clients
+            ):
 
-                value = float(lcv[target_id])
-                expected = float(
-                    estimated_contributions[target_id]
+                value = float(
+                    lcv[target_id]
                 )
 
-                # Do not test absent/zero entries against the
-                # estimated contribution.
+                expected = float(
+                    estimated_contributions[
+                        target_id
+                    ]
+                )
+
+                # Sparse zero entries are ignored.
                 if value == 0.0:
-                    entry_outliers[reporter_id][target_id] = False
+
+                    entry_outliers[
+                        reporter_id
+                    ][target_id] = False
+
                     continue
 
-                deviation = abs(value - expected)
+                deviation = abs(
+                    value - expected
+                )
 
                 is_outlier = (
-                    deviation > self.outlier_threshold
+                    deviation
+                    > self.outlier_threshold
                 )
 
-                entry_outliers[reporter_id][target_id] = (
-                    is_outlier
-                )
+                entry_outliers[
+                    reporter_id
+                ][target_id] = is_outlier
 
                 max_deviation = max(
                     max_deviation,
@@ -276,10 +435,16 @@ class Coordinator:
                 )
 
                 if is_outlier:
+
                     client_is_outlier = True
 
-            client_outliers[reporter_id] = client_is_outlier
-            max_deviations[reporter_id] = max_deviation
+            client_outliers[
+                reporter_id
+            ] = client_is_outlier
+
+            max_deviations[
+                reporter_id
+            ] = max_deviation
 
         return (
             client_outliers,
@@ -288,9 +453,9 @@ class Coordinator:
             max_deviations,
         )
 
-    # =============================================================
+    # =========================================================
     # Probabilistic audit
-    # =============================================================
+    # =========================================================
 
     def _audit_client(
         self,
@@ -309,32 +474,63 @@ class Coordinator:
             OR
             random() < audit_probability
 
-        If audited, compare the complete reported vector against
-        the ground-truth vector.
+        Both triggers are tracked separately.
 
-        A dishonest report is replaced by the ground-truth vector,
-        with the attacker's own reward set to zero.
+        Audit reasons:
+
+            None
+            "random"
+            "outlier"
+            "both"
+
+        If audited, the reported LCV is compared against the
+        deterministic ground-truth LCV.
+
+        A dishonest report is replaced by the ground-truth LCV,
+        with the attacker's own contribution set to zero.
         """
+
+        # -----------------------------------------------------
+        # Random audit
+        # -----------------------------------------------------
 
         random_audit = (
             self.rng.random()
             < self.audit_probability
         )
 
-        audited = forced_audit or random_audit
+        # -----------------------------------------------------
+        # Final audit decision
+        # -----------------------------------------------------
 
-        if forced_audit:
+        audited = (
+            forced_audit
+            or random_audit
+        )
+
+        # -----------------------------------------------------
+        # Determine audit reason
+        # -----------------------------------------------------
+
+        if forced_audit and random_audit:
+
+            audit_reason = "both"
+
+        elif forced_audit:
+
             audit_reason = "outlier"
 
         elif random_audit:
+
             audit_reason = "random"
 
         else:
+
             audit_reason = None
 
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
         # No audit
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
 
         if not audited:
 
@@ -342,40 +538,47 @@ class Coordinator:
                 reported_lcv.clone(),
                 {
                     "audited": False,
+
+                    "random_audit": False,
+
+                    "outlier_audit": False,
+
                     "accepted": None,
+
                     "flagged": False,
+
                     "audit_reason": None,
+
                     "max_deviation": None,
-                    "outlier_deviation": outlier_deviation,
+
+                    "outlier_deviation":
+                        outlier_deviation,
                 },
             )
 
-        # ---------------------------------------------------------
-        # Audit: compare against deterministic ground truth.
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
+        # Audit against ground truth
+        # -----------------------------------------------------
 
         deviation = (
-            reported_lcv - ground_truth_lcv
+            reported_lcv
+            - ground_truth_lcv
         ).abs()
 
         max_deviation = float(
             deviation.max()
         )
 
-        # An audit checks whether the reported vector is exactly
-        # the deterministic LCV.
-        #
-        # We use a tiny numerical tolerance because this is a
-        # floating-point computation.
         numerical_tolerance = 1e-7
 
         accepted = (
-            max_deviation <= numerical_tolerance
+            max_deviation
+            <= numerical_tolerance
         )
 
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
         # Honest report
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
 
         if accepted:
 
@@ -383,45 +586,72 @@ class Coordinator:
                 reported_lcv.clone(),
                 {
                     "audited": True,
+
+                    "random_audit":
+                        random_audit,
+
+                    "outlier_audit":
+                        forced_audit,
+
                     "accepted": True,
+
                     "flagged": False,
-                    "audit_reason": audit_reason,
-                    "max_deviation": max_deviation,
-                    "outlier_deviation": outlier_deviation,
+
+                    "audit_reason":
+                        audit_reason,
+
+                    "max_deviation":
+                        max_deviation,
+
+                    "outlier_deviation":
+                        outlier_deviation,
                 },
             )
 
-        # ---------------------------------------------------------
+        # -----------------------------------------------------
         # Dishonest report
         #
-        # Replace it with the recomputed correct LCV.
-        #
-        # IMPORTANT:
-        # We do NOT zero the LCV itself globally.
-        #
-        # We only remove the malicious client's reward for this
-        # round.
-        # ---------------------------------------------------------
+        # Replace with recomputed ground truth and remove the
+        # attacker's reward for this round.
+        # -----------------------------------------------------
 
-        corrected_lcv = ground_truth_lcv.clone()
+        corrected_lcv = (
+            ground_truth_lcv.clone()
+        )
 
-        corrected_lcv[client_id] = 0.0
+        corrected_lcv[
+            client_id
+        ] = 0.0
 
         return (
             corrected_lcv,
             {
                 "audited": True,
+
+                "random_audit":
+                    random_audit,
+
+                "outlier_audit":
+                    forced_audit,
+
                 "accepted": False,
+
                 "flagged": True,
-                "audit_reason": audit_reason,
-                "max_deviation": max_deviation,
-                "outlier_deviation": outlier_deviation,
+
+                "audit_reason":
+                    audit_reason,
+
+                "max_deviation":
+                    max_deviation,
+
+                "outlier_deviation":
+                    outlier_deviation,
             },
         )
 
-    # =============================================================
+    # =========================================================
     # Complete round
-    # =============================================================
+    # =========================================================
 
     def update_round(
         self,
@@ -432,31 +662,32 @@ class Coordinator:
         """
         Update all contribution versions.
 
-        Parameters
-        ----------
-        ground_truth_lcv_dict:
-            Correct LCV computed before any malicious manipulation.
+        If outlier_threshold is None, only probabilistic
+        auditing is performed.
 
-        reported_lcv_dict:
-            LCVs actually reported by clients.
-
-        network:
-            DFL network.
-
-        The audited version first performs global outlier detection
-        across all reported LCVs. Suspicious reports are then
-        automatically audited, while additional reports are
-        randomly audited.
+        If outlier_threshold is not None, suspicious reports
+        are additionally forced into the audit process.
         """
 
+        if self.outlier_threshold is None:
+
+            heuristic_status = "disabled"
+
+        else:
+
+            heuristic_status = "enabled"
+
         print(
-            f"[Coordinator] Updating contributions for "
-            f"{len(reported_lcv_dict)} clients"
+            "[Coordinator] Updating "
+            f"{len(reported_lcv_dict)} clients "
+            f"(p={self.audit_probability}, "
+            f"threshold={self.outlier_threshold}, "
+            f"heuristic={heuristic_status})"
         )
 
-        # =========================================================
-        # 1. Detect LCV outliers BEFORE propagating anything.
-        # =========================================================
+        # =====================================================
+        # 1. Outlier detection
+        # =====================================================
 
         (
             client_outliers,
@@ -467,26 +698,48 @@ class Coordinator:
             reported_lcv_dict
         )
 
-        # Save estimated contribution vector for analysis.
+        num_outliers = sum(
+            client_outliers.values()
+        )
+
+        # -----------------------------------------------------
+        # Save detection information
+        # -----------------------------------------------------
+
         self.outlier_history.append(
             {
                 "estimated_contributions":
                     estimated_contributions.clone(),
 
                 "client_outliers":
-                    copy.deepcopy(client_outliers),
+                    copy.deepcopy(
+                        client_outliers
+                    ),
 
                 "entry_outliers":
-                    copy.deepcopy(entry_outliers),
+                    copy.deepcopy(
+                        entry_outliers
+                    ),
 
                 "max_deviations":
-                    copy.deepcopy(max_deviations),
+                    copy.deepcopy(
+                        max_deviations
+                    ),
+
+                "num_outliers":
+                    num_outliers,
+
+                "outlier_threshold":
+                    self.outlier_threshold,
+
+                "heuristic_enabled":
+                    self.outlier_threshold is not None,
             }
         )
 
-        # =========================================================
-        # 2. Propagate all three versions.
-        # =========================================================
+        # =====================================================
+        # 2. Propagate all three versions
+        # =====================================================
 
         new_original = {}
         new_modified = {}
@@ -494,106 +747,140 @@ class Coordinator:
 
         round_audit_log = {}
 
-        for client_id, reported_lcv in reported_lcv_dict.items():
+        for client_id, reported_lcv in (
+            reported_lcv_dict.items()
+        ):
 
             ground_truth_lcv = (
-                ground_truth_lcv_dict[client_id]
+                ground_truth_lcv_dict[
+                    client_id
+                ]
             )
 
-            print(
-                f"[Coordinator] Updating client {client_id}"
-            )
+            # -------------------------------------------------
+            # Version 1: Original
+            # -------------------------------------------------
 
-            # -----------------------------------------------------
-            # Version 1: original
-            # -----------------------------------------------------
-
-            new_original[client_id] = (
-                self.update_single(
-                    client_id,
-                    reported_lcv,
-                    network,
-                    self.original_contributions,
-                )
-            )
-
-            # -----------------------------------------------------
-            # Version 2: previous modified baseline
-            # -----------------------------------------------------
-
-            modified_lcv = copy.deepcopy(
-                reported_lcv
-            )
-
-            modified_lcv[client_id] = 0.0
-
-            new_modified[client_id] = (
-                self.update_single(
-                    client_id,
-                    modified_lcv,
-                    network,
-                    self.modified_contributions,
-                )
-            )
-
-            # -----------------------------------------------------
-            # Version 3: proposed audited protocol
-            # -----------------------------------------------------
-
-            forced_audit = client_outliers[
+            new_original[
                 client_id
-            ]
+            ] = self.update_single(
+                client_id,
+                reported_lcv,
+                network,
+                self.original_contributions,
+            )
 
-            outlier_deviation = max_deviations[
+            # -------------------------------------------------
+            # Version 2: Modified baseline
+            # -------------------------------------------------
+
+            modified_lcv = (
+                reported_lcv.clone()
+            )
+
+            modified_lcv[
                 client_id
-            ]
+            ] = 0.0
+
+            new_modified[
+                client_id
+            ] = self.update_single(
+                client_id,
+                modified_lcv,
+                network,
+                self.modified_contributions,
+            )
+
+            # -------------------------------------------------
+            # Version 3: Audited protocol
+            # -------------------------------------------------
+
+            forced_audit = (
+                client_outliers[
+                    client_id
+                ]
+            )
+
+            outlier_deviation = (
+                max_deviations[
+                    client_id
+                ]
+            )
 
             audited_lcv, outcome = (
                 self._audit_client(
                     client_id=client_id,
-                    ground_truth_lcv=ground_truth_lcv,
-                    reported_lcv=reported_lcv,
-                    forced_audit=forced_audit,
-                    outlier_deviation=outlier_deviation,
+
+                    ground_truth_lcv=
+                        ground_truth_lcv,
+
+                    reported_lcv=
+                        reported_lcv,
+
+                    forced_audit=
+                        forced_audit,
+
+                    outlier_deviation=
+                        outlier_deviation,
                 )
             )
 
-            round_audit_log[client_id] = outcome
+            round_audit_log[
+                client_id
+            ] = outcome
 
-            new_audited[client_id] = (
-                self.update_single(
-                    client_id,
-                    audited_lcv,
-                    network,
-                    self.audited_contributions,
-                )
+            new_audited[
+                client_id
+            ] = self.update_single(
+                client_id,
+                audited_lcv,
+                network,
+                self.audited_contributions,
             )
 
-        # =========================================================
-        # 3. Commit state.
-        # =========================================================
+        # =====================================================
+        # 3. Commit state
+        # =====================================================
 
-        self.original_contributions = new_original
-        self.modified_contributions = new_modified
-        self.audited_contributions = new_audited
+        self.original_contributions = (
+            new_original
+        )
+
+        self.modified_contributions = (
+            new_modified
+        )
+
+        self.audited_contributions = (
+            new_audited
+        )
 
         self.audit_log.append(
             round_audit_log
         )
 
         print(
-            "[Coordinator] Round propagation finished"
+            "[Coordinator] Round propagation "
+            "finished"
         )
 
-    # =============================================================
+    # =========================================================
     # Accessors
-    # =============================================================
+    # =========================================================
 
     def get_contribution(
         self,
         client_id,
         method="original",
     ):
+        """
+        Return one client's contribution vector.
+
+        method:
+            "original"
+            "modified"
+            "audited"
+        """
+
         mapping = {
             "original":
                 self.original_contributions,
@@ -606,13 +893,20 @@ class Coordinator:
         }
 
         if method not in mapping:
+
             raise ValueError(
                 f"Unknown method: {method}"
             )
 
-        return mapping[method][client_id]
+        return mapping[
+            method
+        ][client_id]
 
     def get_all_contributions(self):
+        """
+        Return all current contribution states.
+        """
+
         return {
             "original":
                 self.original_contributions,
@@ -625,7 +919,15 @@ class Coordinator:
         }
 
     def get_audit_log(self):
+        """
+        Return the complete audit history.
+        """
+
         return self.audit_log
 
     def get_outlier_history(self):
+        """
+        Return the complete outlier detection history.
+        """
+
         return self.outlier_history
