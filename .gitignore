@@ -4,6 +4,8 @@
 
 # Results
 results2/results/
+experiments/trip_reproduction/results
+experiments/trip_reproduction/results2
 
 # If you only want to ignore these specific files:
 all_telemetry.pkl

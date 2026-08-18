@@ -3,14 +3,15 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import spearmanr
 
 
-RESULTS_DIR = Path("results")
+# ================================================================
+# Configuration
+# ================================================================
+
+RESULTS_DIR = Path("results2")
 FIGURES_DIR = Path("figures")
 FIGURES_DIR.mkdir(exist_ok=True)
-
-# --- Experiment configuration (adjust to match your actual runs) ---
 
 SEEDS = [1, 2, 3]
 
@@ -18,576 +19,1275 @@ TOPOLOGY = "ring"
 NUM_CLIENTS = 10
 ROUNDS = 20
 
-# Which single-attacker strength scenario to use for Plot 2.
-# Kept at strength 1.0 to match the multi-attacker scenario's fixed
-# strength, so Plot 2 and Plot 3 are directly comparable.
-SINGLE_ATTACKER_SCENARIO = "single_s1"
+# Main operating point used by the proposed defense
+MAIN_AUDIT_PROBABILITY = 0.20
+MAIN_THRESHOLD = 0.01
 
-MULTI_ATTACKER_SCENARIOS = ["multi_2", "multi_3"]
+# Experimental values
+AUDIT_PROBABILITIES = [
+    0.05,
+    0.10,
+    0.20,
+    0.50,
+    1.00,
+]
 
-HONEST_SCENARIO = "clean"
+THRESHOLDS = [
+    0.001,
+    0.005,
+    0.01,
+    0.05,
+    0.10,
+]
 
+ATTACK_STRENGTHS = [1, 5, 10, 20, 50]
+
+
+# ================================================================
+# Result loading
+# ================================================================
 
 def result_path(seed):
-    return RESULTS_DIR / f"CIFAR10_{TOPOLOGY}_{NUM_CLIENTS}clients_{ROUNDS}rounds_seed_{seed}.pkl"
+    return (
+        RESULTS_DIR
+        / f"CIFAR10_{TOPOLOGY}_{NUM_CLIENTS}clients_"
+          f"{ROUNDS}rounds_seed{seed}.pkl"
+    )
 
 
 def load_result(path):
     print(f"Loading: {path}")
+
     if not path.exists():
         raise FileNotFoundError(
-            f"Could not find {path}. Update SEEDS / result_path() to match "
-            f"your actual filenames."
+            f"Could not find result file:\n{path}"
         )
+
     with open(path, "rb") as f:
         return pickle.load(f)
 
 
-def load_all_seeds():
-    histories = []
+def load_all_results():
+    results = []
+
     for seed in SEEDS:
-        h = load_result(result_path(seed))
-        print(f"  scenarios found: {list(h['contributions'].keys())}")
-        histories.append(h)
-    return histories
+        results.append(
+            load_result(result_path(seed))
+        )
+
+    print(f"\nLoaded {len(results)} result files.")
+
+    return results
 
 
-# ---------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------
+# ================================================================
+# Scenario helpers
+# ================================================================
 
-def get_round_matrix(history, scenario_name, version, round_idx):
+def scenario_key(base_scenario, audit_probability, threshold):
     """
-    Returns the contribution matrix for a given scenario, version
-    ("original" or "modified"), and round index (0-based).
+    Construct the scenario key used by the simulator.
     """
 
-    contributions = history["contributions"][scenario_name]
+    threshold_string = (
+        "None"
+        if threshold is None
+        else str(threshold)
+    )
+
+    return (
+        f"{base_scenario}"
+        f"__p_{audit_probability}"
+        f"__threshold_{threshold_string}"
+    )
+
+
+# ================================================================
+# Contribution helpers
+# ================================================================
+
+def get_contribution_entry(
+    history,
+    base_scenario,
+    audit_probability,
+    threshold,
+    round_idx,
+    version,
+):
+    """
+    Get one contribution matrix.
+    """
+
+    scenario = scenario_key(
+        base_scenario,
+        audit_probability,
+        threshold,
+    )
+
+    contributions = history["contributions"][scenario]
+
     entry = contributions[round_idx][version]
+
     client_ids = sorted(entry.keys())
 
     matrix = np.stack(
-        [np.asarray(entry[cid], dtype=float) for cid in client_ids]
+        [
+            np.asarray(entry[cid], dtype=float)
+            for cid in client_ids
+        ]
     )
 
     return matrix, client_ids
 
 
-def num_rounds_recorded(history, scenario_name):
-    return len(history["contributions"][scenario_name])
-
-
-# ---------------------------------------------------------------------
-# Plot 1: Honest scenario, Spearman rank correlation original vs modified
-# ---------------------------------------------------------------------
-
-def spearman_per_round(history, scenario_name=HONEST_SCENARIO):
-    """
-    For each round, computes the Spearman correlation between the
-    original and modified contribution rows for every receiving
-    client, then averages across receivers.
-
-    Returns an array of shape (num_rounds,).
-    """
-
-    n_rounds = num_rounds_recorded(history, scenario_name)
-    rhos = np.full(n_rounds, np.nan)
-
-    for r in range(n_rounds):
-
-        orig_matrix, client_ids = get_round_matrix(
-            history, scenario_name, "original", r
-        )
-        mod_matrix, _ = get_round_matrix(
-            history, scenario_name, "modified", r
-        )
-
-        row_rhos = []
-
-        for row in range(len(client_ids)):
-
-            rho, _ = spearmanr(orig_matrix[row], mod_matrix[row])
-
-            if np.isfinite(rho):
-                row_rhos.append(rho)
-
-        if row_rhos:
-            rhos[r] = np.mean(row_rhos)
-
-    return rhos
-
-
-def plot_honest_ranking_correlation(histories):
-    """
-    Plot 1: Spearman correlation between original and modified
-    contribution rankings in the honest scenario, per round,
-    averaged over seeds (mean +/- std band).
-    """
-
-    per_seed_rhos = np.stack(
-        [spearman_per_round(h, HONEST_SCENARIO) for h in histories]
-    )  # shape (n_seeds, n_rounds)
-
-    mean_rho = np.nanmean(per_seed_rhos, axis=0)
-    std_rho = np.nanstd(per_seed_rhos, axis=0)
-
-    rounds = np.arange(1, per_seed_rhos.shape[1] + 1)
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-
-    ax.plot(rounds, mean_rho, marker="o", color="C0", label=r"$\rho_t$")
-    ax.fill_between(
-        rounds,
-        mean_rho - std_rho,
-        mean_rho + std_rho,
-        color="C0",
-        alpha=0.2,
-        label="±1 std (seeds)",
-    )
-
-    ax.set_xlabel("Communication round $t$")
-    ax.set_ylabel(r"Spearman correlation $\rho_t$")
-    ax.set_title("Honest scenario: ranking correlation\n(Original vs. Modified TRIP-Shapley)")
-
-    # Zoom into the observed range instead of the full [-1, 1] scale,
-    # with a small padding so points don't sit flush on the axes.
-    y_min = np.nanmin(mean_rho - std_rho)
-    y_max = np.nanmax(mean_rho + std_rho)
-    padding = max(0.02, 0.1 * (y_max - y_min))
-    ax.set_ylim(
-        max(-1.0, y_min - padding),
-        min(1.0, y_max + padding),
-    )
-
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-
-    fig.tight_layout()
-    fig.savefig(FIGURES_DIR / "plot1_honest_ranking_correlation.pdf")
-    fig.savefig(FIGURES_DIR / "plot1_honest_ranking_correlation.png", dpi=200)
-    plt.close(fig)
-
-    print(f"\nPlot 1 saved. Final-round mean rho: {mean_rho[-1]:.4f} (+/- {std_rho[-1]:.4f})")
-
-    # Overall summary across the whole trajectory: all rounds and
-    # all seeds pooled into one distribution, not just the final
-    # round. Useful as a single number to cite in text.
-    all_values = per_seed_rhos[np.isfinite(per_seed_rhos)]
-    overall_mean = float(np.mean(all_values))
-    overall_std = float(np.std(all_values))
-
-    print(
-        f"Overall (all {per_seed_rhos.shape[1]} rounds x "
-        f"{per_seed_rhos.shape[0]} seeds pooled): "
-        f"mean rho = {overall_mean:.4f} (+/- {overall_std:.4f})"
-    )
-
-    # Round 1 is a known outlier (contribution vectors are still
-    # mostly zero-filled at that point - see earlier discussion),
-    # so also report the same summary excluding it, for reference.
-    if per_seed_rhos.shape[1] > 1:
-        excl_r1 = per_seed_rhos[:, 1:]
-        excl_r1_values = excl_r1[np.isfinite(excl_r1)]
-        excl_mean = float(np.mean(excl_r1_values))
-        excl_std = float(np.std(excl_r1_values))
-        print(
-            f"Overall excluding round 1: "
-            f"mean rho = {excl_mean:.4f} (+/- {excl_std:.4f})"
-        )
-
-
-# ---------------------------------------------------------------------
-# Plots 2 & 3: self-contribution of malicious client(s) over rounds
-# ---------------------------------------------------------------------
-
-def self_contribution_per_round(history, scenario_name, version, attacker_ids):
-    """
-    Sums the diagonal entries (self-contribution) of the given
-    attacker_ids, for every round, under a given version
-    ("original" or "modified").
-
-    Returns an array of shape (num_rounds,).
-    """
-
-    n_rounds = num_rounds_recorded(history, scenario_name)
-    values = np.zeros(n_rounds)
-
-    for r in range(n_rounds):
-
-        matrix, client_ids = get_round_matrix(
-            history, scenario_name, version, r
-        )
-
-        idxs = [client_ids.index(cid) for cid in attacker_ids]
-
-        values[r] = sum(matrix[i, i] for i in idxs)
-
-    return values
-
-
-def _plot_attacker_contribution(
-    histories,
-    scenario_name,
-    attacker_ids_fn,
-    title,
-    ylabel,
-    filename,
+def get_final_contribution(
+    history,
+    base_scenario,
+    audit_probability,
+    threshold,
+    version,
+    attacker_id,
 ):
     """
-    Shared plotting logic for Plot 2 (single attacker) and Plot 3
-    (aggregated multiple attackers). attacker_ids_fn(history) returns
-    the list of malicious client ids to use for that seed's history
-    (attacker ids may differ per seed since they were sampled with
-    that seed's RNG state).
+    Return the attacker's self-contribution in the final round.
     """
 
-    per_seed = {"original": [], "modified": []}
+    matrix, client_ids = get_contribution_entry(
+        history,
+        base_scenario,
+        audit_probability,
+        threshold,
+        ROUNDS - 1,
+        version,
+    )
 
-    for h in histories:
+    idx = client_ids.index(attacker_id)
 
-        attacker_ids = attacker_ids_fn(h)
+    return float(matrix[idx, idx])
 
-        for version in ["original", "modified"]:
 
-            series = self_contribution_per_round(
-                h, scenario_name, version, attacker_ids
+# ================================================================
+# Audit statistics
+# ================================================================
+
+def get_audit_statistics(
+    history,
+    base_scenario,
+    audit_probability,
+    threshold,
+):
+    """
+    Calculate audit statistics for one experiment.
+
+    Important distinction:
+
+        random_audit
+            selected because of probabilistic auditing
+
+        outlier_audit
+            selected because of outlier detection
+
+        flagged
+            actually identified as malicious
+
+    We keep these separate because Graph 4 specifically studies
+    the trade-off caused by threshold-based outlier detection.
+    """
+
+    audit_logs = history.get("audit_logs", {})
+
+    key = scenario_key(
+        base_scenario,
+        audit_probability,
+        threshold,
+    )
+
+    if key not in audit_logs:
+        return {
+            "audit_rate": np.nan,
+            "malicious_audit_rate": np.nan,
+            "malicious_detection_rate": np.nan,
+            "honest_audit_rate": np.nan,
+            "false_positive_rate": np.nan,
+            "random_audit_rate": np.nan,
+            "outlier_audit_rate": np.nan,
+            "malicious_outlier_audit_rate": np.nan,
+            "honest_outlier_audit_rate": np.nan,
+        }
+
+    attacker_ids = set()
+
+    single_attacker = history.get(
+        "single_attacker_id"
+    )
+
+    if single_attacker is not None:
+        attacker_ids.add(single_attacker)
+
+    attacker_ids.update(
+        history.get("multi_attacker_ids", [])
+    )
+
+    total_reports = 0
+    total_audited = 0
+
+    total_random_audits = 0
+    total_outlier_audits = 0
+
+    malicious_reports = 0
+    malicious_audited = 0
+    malicious_detected = 0
+    malicious_outlier_audits = 0
+
+    honest_reports = 0
+    honest_audited = 0
+    honest_flagged = 0
+    honest_outlier_audits = 0
+
+    log = audit_logs[key]
+
+    for round_log in log:
+
+        if not isinstance(round_log, dict):
+            continue
+
+        for client_id, outcome in round_log.items():
+
+            if not isinstance(outcome, dict):
+                continue
+
+            total_reports += 1
+
+            audited = bool(
+                outcome.get("audited", False)
             )
 
-            per_seed[version].append(series)
+            random_audit = bool(
+                outcome.get("random_audit", False)
+            )
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+            outlier_audit = bool(
+                outcome.get("outlier_audit", False)
+            )
 
-    colors = {"original": "C3", "modified": "C0"}
-    labels = {"original": "Original TRIP-Shapley", "modified": "Modified TRIP-Shapley"}
+            flagged = bool(
+                outcome.get("flagged", False)
+            )
 
-    rounds = None
+            if audited:
+                total_audited += 1
 
-    for version in ["original", "modified"]:
+            if random_audit:
+                total_random_audits += 1
 
-        stacked = np.stack(per_seed[version])  # (n_seeds, n_rounds)
+            if outlier_audit:
+                total_outlier_audits += 1
 
-        mean_series = np.mean(stacked, axis=0)
-        std_series = np.std(stacked, axis=0)
+            is_malicious = (
+                client_id in attacker_ids
+            )
 
-        if rounds is None:
-            rounds = np.arange(1, stacked.shape[1] + 1)
+            if is_malicious:
 
-        ax.plot(
-            rounds, mean_series, marker="o",
-            color=colors[version], label=labels[version],
-        )
-        ax.fill_between(
-            rounds,
-            mean_series - std_series,
-            mean_series + std_series,
-            color=colors[version],
-            alpha=0.2,
-        )
+                malicious_reports += 1
 
-        print(
-            f"[{scenario_name} / {version}] final round: "
-            f"{mean_series[-1]:.4f} (+/- {std_series[-1]:.4f})"
-        )
+                if audited:
+                    malicious_audited += 1
 
-    ax.set_xlabel("Communication round $t$")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+                if flagged:
+                    malicious_detected += 1
+
+                if outlier_audit:
+                    malicious_outlier_audits += 1
+
+            else:
+
+                honest_reports += 1
+
+                if audited:
+                    honest_audited += 1
+
+                if flagged:
+                    honest_flagged += 1
+
+                if outlier_audit:
+                    honest_outlier_audits += 1
+
+    return {
+        "audit_rate": (
+            total_audited / total_reports
+            if total_reports > 0
+            else np.nan
+        ),
+
+        "malicious_audit_rate": (
+            malicious_audited / malicious_reports
+            if malicious_reports > 0
+            else np.nan
+        ),
+
+        "malicious_detection_rate": (
+            malicious_detected / malicious_reports
+            if malicious_reports > 0
+            else np.nan
+        ),
+
+        "honest_audit_rate": (
+            honest_audited / honest_reports
+            if honest_reports > 0
+            else np.nan
+        ),
+
+        "false_positive_rate": (
+            honest_flagged / honest_reports
+            if honest_reports > 0
+            else np.nan
+        ),
+
+        "random_audit_rate": (
+            total_random_audits / total_reports
+            if total_reports > 0
+            else np.nan
+        ),
+
+        "outlier_audit_rate": (
+            total_outlier_audits / total_reports
+            if total_reports > 0
+            else np.nan
+        ),
+
+        "malicious_outlier_audit_rate": (
+            malicious_outlier_audits / malicious_reports
+            if malicious_reports > 0
+            else np.nan
+        ),
+
+        "honest_outlier_audit_rate": (
+            honest_outlier_audits / honest_reports
+            if honest_reports > 0
+            else np.nan
+        ),
+    }
+
+
+# ================================================================
+# Generic statistics
+# ================================================================
+
+def mean_std(values):
+    values = np.asarray(
+        values,
+        dtype=float,
+    )
+
+    return (
+        float(np.nanmean(values)),
+        float(np.nanstd(values)),
+    )
+
+
+def save_figure(fig, filename):
+    pdf_path = FIGURES_DIR / f"{filename}.pdf"
+    png_path = FIGURES_DIR / f"{filename}.png"
 
     fig.tight_layout()
-    fig.savefig(FIGURES_DIR / f"{filename}.pdf")
-    fig.savefig(FIGURES_DIR / f"{filename}.png", dpi=200)
+
+    fig.savefig(pdf_path)
+
+    fig.savefig(
+        png_path,
+        dpi=250,
+        bbox_inches="tight",
+    )
+
     plt.close(fig)
 
-    print(f"Saved {filename}.pdf / .png\n")
+    print(f"Saved {pdf_path}")
+    print(f"Saved {png_path}")
 
 
-def self_contribution_final(history, scenario_name, version, attacker_ids):
+# ================================================================
+# Plot 1
+#
+# Attack effectiveness
+# ================================================================
+
+def plot_attack_effectiveness(results):
     """
-    Convenience wrapper: final-round value of
-    self_contribution_per_round.
-    """
-
-    series = self_contribution_per_round(
-        history, scenario_name, version, attacker_ids
-    )
-
-    return series[-1]
-
-
-def plot_single_attacker_strength_sweep(histories):
-    """
-    Plot 2 (central figure): attacker's final contribution as a
-    function of attack strength, for both Original and Modified
-    TRIP-Shapley, against an honest baseline.
-
-    The honest baseline is the attacker's contribution under the
-    ORIGINAL method in the clean (no attack) scenario - i.e. the
-    "true" deserved contribution the attacker would get if it
-    reported honestly. It is not taken from the modified method,
-    since modified always zeroes the self-entry regardless of
-    attack presence, so an honest-vs-attacked comparison under
-    modified alone would be close to tautological.
-
-    Because the modified method always sets the self-contribution
-    entry to zero before propagation - independent of the reported
-    strength - its curve is expected to stay flat across strengths,
-    while the original method's curve should grow with strength.
-    This is the plot that visually demonstrates that vulnerability
-    and the fix.
+    Shows that contribution inflation attacks are effective
+    against the original method and how the modified method
+    limits this effect.
     """
 
-    strengths = [1, 5, 10, 20, 50]
-    scenario_names = {s: f"single_s{s}" for s in strengths}
+    attacker_id = results[0][
+        "single_attacker_id"
+    ]
 
-    honest_vals = []
-    original_vals = {s: [] for s in strengths}
-    modified_vals = {s: [] for s in strengths}
+    original = {
+        s: []
+        for s in ATTACK_STRENGTHS
+    }
 
-    for h in histories:
+    modified = {
+        s: []
+        for s in ATTACK_STRENGTHS
+    }
 
-        attacker_ids = [h["single_attacker_id"]]
+    honest = []
 
-        honest_vals.append(
-            self_contribution_final(h, HONEST_SCENARIO, "original", attacker_ids)
+    for history in results:
+
+        honest.append(
+            get_final_contribution(
+                history,
+                "clean",
+                MAIN_AUDIT_PROBABILITY,
+                MAIN_THRESHOLD,
+                "original",
+                attacker_id,
+            )
         )
 
-        for s in strengths:
-            name = scenario_names[s]
+        for strength in ATTACK_STRENGTHS:
 
-            original_vals[s].append(
-                self_contribution_final(h, name, "original", attacker_ids)
-            )
-            modified_vals[s].append(
-                self_contribution_final(h, name, "modified", attacker_ids)
+            scenario = (
+                f"single_s{strength}"
             )
 
-    honest_mean = float(np.mean(honest_vals))
-    honest_std = float(np.std(honest_vals))
+            original[strength].append(
+                get_final_contribution(
+                    history,
+                    scenario,
+                    MAIN_AUDIT_PROBABILITY,
+                    MAIN_THRESHOLD,
+                    "original",
+                    attacker_id,
+                )
+            )
 
-    original_means = np.array([np.mean(original_vals[s]) for s in strengths])
-    original_stds = np.array([np.std(original_vals[s]) for s in strengths])
+            modified[strength].append(
+                get_final_contribution(
+                    history,
+                    scenario,
+                    MAIN_AUDIT_PROBABILITY,
+                    MAIN_THRESHOLD,
+                    "modified",
+                    attacker_id,
+                )
+            )
 
-    # Modified is invariant to strength by construction (the
-    # self-entry is always zeroed regardless of the reported fake
-    # value), so instead of plotting near-identical points per
-    # strength, pool all (strength, seed) observations into one
-    # overall estimate and draw it as a flat line - same treatment
-    # as the honest baseline. std is kept only for the console
-    # summary below, not plotted (no shaded bands / error bars).
-    modified_pooled = np.array(
-        [v for s in strengths for v in modified_vals[s]]
+    original_mean = np.array([
+        np.mean(original[s])
+        for s in ATTACK_STRENGTHS
+    ])
+
+    modified_mean = np.array([
+        np.mean(modified[s])
+        for s in ATTACK_STRENGTHS
+    ])
+
+    honest_mean = np.mean(honest)
+
+    x = np.arange(
+        len(ATTACK_STRENGTHS)
     )
-    modified_mean = float(np.mean(modified_pooled))
-    modified_std = float(np.std(modified_pooled))
 
-    x = np.arange(len(strengths))
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-
-    ax.axhline(
-        honest_mean, color="gray", linestyle="--",
-        label="Honest baseline (no attack, Original)",
-    )
-
-    ax.axhline(
-        modified_mean, color="C0", linestyle="-",
-        label="Modified TRIP-Shapley (all strengths)",
+    fig, ax = plt.subplots(
+        figsize=(7, 4.8)
     )
 
     ax.plot(
-        x, original_means,
-        marker="o", color="C3",
+        x,
+        original_mean,
+        marker="o",
         label="Original TRIP-Shapley",
     )
 
-    # Value labels so approximate magnitudes are readable directly
-    # from the figure, without having to decode a log axis by eye.
-    for xi, mean in zip(x, original_means):
-        ax.annotate(
-            f"{mean:.1f}",
-            xy=(xi, mean),
-            xytext=(0, 6),
-            textcoords="offset points",
-            ha="center", va="bottom",
-            fontsize=7.5, color="C3",
-        )
-
-    # Both Modified and the honest baseline are flat lines now, so
-    # each gets a single label rather than one per x position. They
-    # sit close together in value, so they're offset in opposite
-    # vertical directions from their respective lines to avoid
-    # overlapping each other.
-    ax.annotate(
-        f"Modified ≈ {modified_mean:.3f}",
-        xy=(x[-1], modified_mean),
-        xytext=(6, -10),
-        textcoords="offset points",
-        ha="left", va="top",
-        fontsize=7.5, color="C0",
+    ax.plot(
+        x,
+        modified_mean,
+        marker="o",
+        label="Modified TRIP-Shapley",
     )
 
-    ax.annotate(
-        f"honest ≈ {honest_mean:.3f}",
-        xy=(x[-1], honest_mean),
-        xytext=(6, 10),
-        textcoords="offset points",
-        ha="left", va="bottom",
-        fontsize=7.5, color="gray",
+    ax.axhline(
+        honest_mean,
+        linestyle=":",
+        label="Honest baseline",
+    )
+
+    ax.set_yscale(
+        "symlog",
+        linthresh=0.1,
     )
 
     ax.set_xticks(x)
-    ax.set_xticklabels([str(s) for s in strengths])
-    ax.set_xlim(x[0] - 0.4, x[-1] + 0.9)
-    ax.set_xlabel("Reported fake self-contribution strength")
-    ax.set_ylabel(r"Attacker final contribution $\phi_i^{(T)}(i)$ (log scale)")
-    ax.set_title("Single attacker: final contribution vs. attack strength")
 
-    # Original spans ~4 to ~220 across strengths, while the honest
-    # baseline and Modified sit near 0.02-0.03 - on a linear axis
-    # these get squashed flat near zero. Log scale keeps both
-    # visible and also makes the (roughly multiplicative) growth
-    # of Original with strength read as a straight-ish line.
-    all_positive = (
-        honest_mean > 0
-        and np.all(original_means > 0)
-        and modified_mean > 0
+    ax.set_xticklabels(
+        [
+            str(s)
+            for s in ATTACK_STRENGTHS
+        ]
     )
 
-    if all_positive:
-        ax.set_yscale("log")
-    else:
-        print(
-            "Warning: non-positive values present, keeping linear "
-            "y-axis (log scale requires all-positive data)."
-        )
+    ax.set_xlabel(
+        "Reported fake self-contribution strength"
+    )
 
-    ax.grid(True, alpha=0.3, which="both")
+    ax.set_ylabel(
+        r"Final attacker contribution "
+        r"$\phi_i^{(T)}(i)$"
+    )
+
+    ax.set_title(
+        "Attack effectiveness"
+        f" (p={MAIN_AUDIT_PROBABILITY}, "
+        f"threshold={MAIN_THRESHOLD})"
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+        which="both",
+    )
+
     ax.legend()
 
-    fig.tight_layout()
-    fig.savefig(FIGURES_DIR / "plot2_single_attacker_strength_sweep.pdf")
-    fig.savefig(FIGURES_DIR / "plot2_single_attacker_strength_sweep.png", dpi=200)
-    plt.close(fig)
+    save_figure(
+        fig,
+        "plot1_attack_effectiveness",
+    )
 
-    print(f"\nHonest baseline (Original, no attack): {honest_mean:.4f} (+/- {honest_std:.4f})")
-    print(f"Modified (pooled across all strengths): {modified_mean:.4f} (+/- {modified_std:.4f})")
-    for s, om, os_ in zip(strengths, original_means, original_stds):
-        print(f"  strength {s:>3}: Original = {om:.4f} (+/- {os_:.4f})")
-    for s in strengths:
-        print(
-            f"  strength {s:>3}: Modified = "
-            f"{np.mean(modified_vals[s]):.4f} (+/- {np.std(modified_vals[s]):.4f}) "
-            f"[shown pooled in the plot]"
+
+# ================================================================
+# Plot 2
+#
+# Detection vs random audit probability
+# ================================================================
+
+def plot_detection_vs_audit_probability(
+    results,
+):
+    """
+    Shows that random auditing detects malicious clients
+    at approximately the configured probability p.
+
+    Outlier detection is disabled.
+    """
+
+    detection_means = []
+    detection_stds = []
+
+    for p in AUDIT_PROBABILITIES:
+
+        values = []
+
+        for history in results:
+
+            stats = get_audit_statistics(
+                history,
+                "single_s1",
+                p,
+                None,
+            )
+
+            values.append(
+                stats[
+                    "malicious_audit_rate"
+                ]
+            )
+
+        mean, std = mean_std(
+            values
         )
-    print("Saved plot2_single_attacker_strength_sweep.pdf / .png\n")
+
+        detection_means.append(mean)
+        detection_stds.append(std)
+
+    p_values = np.asarray(
+        AUDIT_PROBABILITIES,
+        dtype=float,
+    )
+
+    detection_means = np.asarray(
+        detection_means
+    )
+
+    detection_stds = np.asarray(
+        detection_stds
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(7, 4.8)
+    )
+
+    ax.errorbar(
+        p_values,
+        detection_means,
+        yerr=detection_stds,
+        marker="o",
+        capsize=4,
+        label="Measured detection rate",
+    )
+
+    ax.plot(
+        p_values,
+        p_values,
+        linestyle="--",
+        label="Ideal random-audit rate",
+    )
+
+    ax.set_xlabel(
+        "Random audit probability $p$"
+    )
+
+    ax.set_ylabel(
+        "Malicious reports audited"
+    )
+
+    ax.set_title(
+        "Probabilistic auditing detects malicious clients"
+    )
+
+    ax.set_xlim(
+        0,
+        1.05,
+    )
+
+    ax.set_ylim(
+        0,
+        1.05,
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+    )
+
+    ax.legend()
+
+    save_figure(
+        fig,
+        "plot2_detection_vs_audit_probability",
+    )
+
+    print(
+        "\nRandom-audit detection results:"
+    )
+
+    for p, mean, std in zip(
+        p_values,
+        detection_means,
+        detection_stds,
+    ):
+        print(
+            f"  p={p:.2f}: "
+            f"detection={mean:.3f} "
+            f"± {std:.3f}"
+        )
 
 
-def plot_multi_attacker_contribution(histories):
+# ================================================================
+# Plot 3
+#
+# Audit probability vs computation cost
+# ================================================================
+
+def plot_audit_cost(results):
     """
-    Plot 3: sum of self-contributions of all malicious clients,
-    over rounds, Original vs Modified, averaged over seeds.
+    Shows the theoretical computational overhead of probabilistic
+    auditing.
 
-    Both fixed attacker-count scenarios (2 and 3 attackers, strength
-    1.0 each) are plotted together so the figure also shows how the
-    aggregated attack effect scales with the number of colluding
-    attackers, not just with strength (as in Plot 2).
+    Baseline:
+        N LCV computations.
+
+    Random auditing:
+        approximately p*N additional LCV computations.
+
+    Therefore:
+        relative cost = 1 + p
     """
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    p_values = np.asarray(
+        AUDIT_PROBABILITIES,
+        dtype=float,
+    )
 
-    # (scenario, version) -> (color, linestyle, label)
-    style = {
-        ("multi_2", "original"): ("C3", "--", "Original, 2 attackers"),
-        ("multi_2", "modified"): ("C0", "--", "Modified, 2 attackers"),
-        ("multi_3", "original"): ("C3", "-",  "Original, 3 attackers"),
-        ("multi_3", "modified"): ("C0", "-",  "Modified, 3 attackers"),
-    }
+    relative_cost = (
+        1.0 + p_values
+    )
 
-    rounds = None
-    all_mean_series = []
+    fig, ax = plt.subplots(
+        figsize=(7, 4.8)
+    )
 
-    for scenario_name in MULTI_ATTACKER_SCENARIOS:
+    ax.plot(
+        p_values,
+        relative_cost,
+        linestyle="--",
+        label=r"Theoretical cost: $1+p$",
+    )
 
-        for version in ["original", "modified"]:
+    ax.scatter(
+        p_values,
+        relative_cost,
+        s=55,
+        zorder=3,
+        label="Configured audit probabilities",
+    )
 
-            per_seed_series = []
+    for p, cost in zip(
+        p_values,
+        relative_cost,
+    ):
+        ax.annotate(
+            f"p={p:g}",
+            xy=(p, cost),
+            xytext=(6, 5),
+            textcoords="offset points",
+            fontsize=9,
+        )
 
-            for h in histories:
+    ax.set_xlabel(
+        "Random audit probability $p$"
+    )
 
-                # multi_2 uses the first 2 ids of the fixed set,
-                # multi_3 uses all 3 - read whatever ids were
-                # actually used for that scenario from history if
-                # available, else fall back to multi_attacker_ids.
-                attacker_ids = h.get(
-                    f"{scenario_name}_attacker_ids",
-                    h.get("multi_attacker_ids", []),
+    ax.set_ylabel(
+        "Relative LCV computation cost"
+    )
+
+    ax.set_title(
+        "Computational overhead of probabilistic auditing"
+    )
+
+    ax.set_xlim(
+        0,
+        1.05,
+    )
+
+    ax.set_ylim(
+        0.95,
+        2.05,
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+    )
+
+    ax.legend()
+
+    save_figure(
+        fig,
+        "plot3_audit_cost_tradeoff",
+    )
+
+    print("\nAudit cost:")
+
+    for p, cost in zip(
+        p_values,
+        relative_cost,
+    ):
+        print(
+            f"  p={p:.2f}: "
+            f"relative LCV cost={cost:.3f}"
+        )
+
+
+# ================================================================
+# Plot 4
+#
+# Threshold-only detection trade-off
+# ================================================================
+
+def plot_threshold_tradeoff(results):
+    """
+    Shows the fundamental problem with relying on outlier detection
+    alone.
+
+    Left axis:
+        fraction of stealth attacks detected by outlier detection.
+
+    Right axis:
+        fraction of honest reports selected for outlier auditing.
+
+    As the threshold becomes larger:
+        - stealth detection becomes weaker
+        - honest-client auditing decreases
+
+    This demonstrates why choosing a threshold alone creates a
+    security/computation trade-off.
+    """
+
+    scenarios = [
+        (
+            "stealth_half",
+            "Stealth half",
+        ),
+        (
+            "stealth_full",
+            "Stealth full",
+        ),
+    ]
+
+    threshold_values = np.asarray(
+        THRESHOLDS,
+        dtype=float,
+    )
+
+    # ------------------------------------------------------------
+    # Stealth detection
+    # ------------------------------------------------------------
+
+    detection_by_scenario = {}
+
+    for scenario, label in scenarios:
+
+        means = []
+        stds = []
+
+        for threshold in threshold_values:
+
+            values = []
+
+            for history in results:
+
+                stats = get_audit_statistics(
+                    history,
+                    scenario,
+                    MAIN_AUDIT_PROBABILITY,
+                    threshold,
                 )
 
-                if scenario_name == "multi_2":
-                    attacker_ids = attacker_ids[:2]
-
-                series = self_contribution_per_round(
-                    h, scenario_name, version, attacker_ids
+                values.append(
+                    stats[
+                        "malicious_outlier_audit_rate"
+                    ]
                 )
 
-                per_seed_series.append(series)
+            mean, std = mean_std(
+                values
+            )
 
-            stacked = np.stack(per_seed_series)
-            mean_series = np.mean(stacked, axis=0)
-            std_series = np.std(stacked, axis=0)
+            means.append(mean)
+            stds.append(std)
 
-            if rounds is None:
-                rounds = np.arange(1, stacked.shape[1] + 1)
+        detection_by_scenario[
+            scenario
+        ] = (
+            np.asarray(means),
+            np.asarray(stds),
+        )
 
-            color, linestyle, label = style[(scenario_name, version)]
+    # ------------------------------------------------------------
+    # Honest-client outlier audit rate
+    #
+    # Use clean experiments because there are no malicious clients
+    # in those runs. Therefore every outlier audit is necessarily
+    # directed at an honest client.
+    # ------------------------------------------------------------
 
-            all_mean_series.append(mean_series)
+    honest_means = []
+    honest_stds = []
 
-            ax.plot(
-                rounds, mean_series, marker="o", markersize=3,
-                color=color, linestyle=linestyle, label=label,
+    for threshold in threshold_values:
+
+        values = []
+
+        for history in results:
+
+            stats = get_audit_statistics(
+                history,
+                "clean",
+                MAIN_AUDIT_PROBABILITY,
+                threshold,
+            )
+
+            values.append(
+                stats[
+                    "outlier_audit_rate"
+                ]
+            )
+
+        mean, std = mean_std(
+            values
+        )
+
+        honest_means.append(mean)
+        honest_stds.append(std)
+
+    honest_means = np.asarray(
+        honest_means
+    )
+
+    honest_stds = np.asarray(
+        honest_stds
+    )
+
+    # ------------------------------------------------------------
+    # Figure
+    # ------------------------------------------------------------
+
+    fig, ax1 = plt.subplots(
+        figsize=(7.5, 5.0)
+    )
+
+    # Stealth detection curves
+    for scenario, label in scenarios:
+
+        means, stds = (
+            detection_by_scenario[
+                scenario
+            ]
+        )
+
+        ax1.errorbar(
+            threshold_values,
+            means,
+            yerr=stds,
+            marker="o",
+            capsize=3,
+            label=f"{label}: attack detection",
+        )
+
+    ax1.set_xscale("log")
+
+    ax1.set_xlabel(
+        "Outlier detection threshold"
+    )
+
+    ax1.set_ylabel(
+        "Stealth attacks detected by outlier detector"
+    )
+
+    ax1.set_ylim(
+        0,
+        1.0,
+    )
+
+    # Honest-client cost on second axis
+    ax2 = ax1.twinx()
+
+    ax2.errorbar(
+        threshold_values,
+        honest_means,
+        yerr=honest_stds,
+        marker="s",
+        linestyle="--",
+        capsize=3,
+        label="Honest reports selected for outlier auditing",
+    )
+
+    ax2.set_ylabel(
+        "Honest reports selected for outlier auditing"
+    )
+
+    ax2.set_ylim(
+        0,
+        1.0,
+    )
+
+    ax1.set_title(
+        "Threshold-only defense: security vs. overhead"
+    )
+
+    ax1.grid(
+        True,
+        alpha=0.3,
+        which="both",
+    )
+
+    # Combine legends from both axes.
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+
+    ax1.legend(
+        handles1 + handles2,
+        labels1 + labels2,
+        fontsize=8.5,
+        loc="best",
+    )
+
+    save_figure(
+        fig,
+        "plot4_threshold_tradeoff",
+    )
+
+    # ------------------------------------------------------------
+    # Print values
+    # ------------------------------------------------------------
+
+    print(
+        "\nThreshold-only trade-off:"
+    )
+
+    for i, threshold in enumerate(
+        threshold_values
+    ):
+
+        print(
+            f"\n  threshold={threshold:g}"
+        )
+
+        for scenario, label in scenarios:
+
+            means, stds = (
+                detection_by_scenario[
+                    scenario
+                ]
             )
 
             print(
-                f"[{scenario_name} / {version}] final round: "
-                f"{mean_series[-1]:.4f} (+/- {std_series[-1]:.4f})"
+                f"    {label}: "
+                f"stealth detection="
+                f"{means[i]:.3f} "
+                f"± {stds[i]:.3f}"
             )
 
-    ax.set_xlabel("Communication round $t$")
-    ax.set_ylabel(
-        r"Aggregated contribution $A_M(t) = \sum_{i \in M} \phi_i^{(t)}(i)$"
-        "\n(symlog scale)"
+        print(
+            f"    honest outlier audit rate="
+            f"{honest_means[i]:.3f} "
+            f"± {honest_stds[i]:.3f}"
+        )
+
+
+# ================================================================
+# Plot 5
+#
+# Combined defense: probability of catching a stealth attacker
+# ================================================================
+
+def plot_combined_detection(results):
+    """
+    Shows why probabilistic auditing complements threshold-based
+    outlier detection.
+
+    For a malicious client, if random auditing occurs independently
+    with probability p per round, the probability of being audited
+    at least once after T rounds is:
+
+        1 - (1-p)^T
+
+    We compare this theoretical cumulative probability with the
+    experimentally observed probability that the attacker is
+    randomly audited at least once.
+
+    The main operating point p=0.20 is highlighted.
+    """
+
+    p_values = np.asarray(
+        AUDIT_PROBABILITIES,
+        dtype=float,
     )
-    ax.set_title("Multiple attackers (strength 1.0): aggregated contribution")
 
-    # Original (2/3 colluding attackers) reaches ~12, while Modified
-    # sits near 0 - and can be exactly 0 at round 1, since phi^(0)=0
-    # and the modified self-entry is always zeroed regardless of
-    # value, so the propagated term is also 0 that round. A plain
-    # log scale can't handle an exact zero; symlog uses a small
-    # linear region around 0 and switches to log further out, so
-    # both the near-zero Modified curves and the much larger
-    # Original curves stay visible on the same axis.
-    all_values = np.concatenate(all_mean_series)
-    nonzero_abs = np.abs(all_values[np.abs(all_values) > 1e-9])
+    # Theoretical probability of at least one random audit
+    # during the full experiment.
+    theoretical_detection = (
+        1.0
+        - (1.0 - p_values) ** ROUNDS
+    )
 
-    linthresh = float(np.min(nonzero_abs)) / 2 if nonzero_abs.size else 0.01
-    linthresh = max(linthresh, 1e-4)  # avoid a degenerately tiny linear region
+    # ------------------------------------------------------------
+    # Experimental probability of at least one random audit
+    # ------------------------------------------------------------
 
-    ax.set_yscale("symlog", linthresh=linthresh)
+    experimental_means = []
+    experimental_stds = []
 
-    ax.grid(True, alpha=0.3, which="both")
-    ax.legend(fontsize=8)
+    for p in p_values:
 
-    fig.tight_layout()
-    fig.savefig(FIGURES_DIR / "plot3_multi_attacker_contribution.pdf")
-    fig.savefig(FIGURES_DIR / "plot3_multi_attacker_contribution.png", dpi=200)
-    plt.close(fig)
+        per_seed_values = []
 
-    print("Saved plot3_multi_attacker_contribution.pdf / .png\n")
+        for history in results:
 
+            key = scenario_key(
+                "stealth_half",
+                p,
+                MAIN_THRESHOLD,
+            )
+
+            audit_logs = history.get(
+                "audit_logs",
+                {},
+            )
+
+            if key not in audit_logs:
+                per_seed_values.append(
+                    np.nan
+                )
+                continue
+
+            attacker_id = history[
+                "single_attacker_id"
+            ]
+
+            was_audited = False
+
+            for round_log in audit_logs[key]:
+
+                if not isinstance(
+                    round_log,
+                    dict,
+                ):
+                    continue
+
+                outcome = round_log.get(
+                    attacker_id
+                )
+
+                if not isinstance(
+                    outcome,
+                    dict,
+                ):
+                    continue
+
+                if outcome.get(
+                    "random_audit",
+                    False,
+                ):
+                    was_audited = True
+                    break
+
+            per_seed_values.append(
+                float(was_audited)
+            )
+
+        mean, std = mean_std(
+            per_seed_values
+        )
+
+        experimental_means.append(
+            mean
+        )
+
+        experimental_stds.append(
+            std
+        )
+
+    experimental_means = np.asarray(
+        experimental_means
+    )
+
+    experimental_stds = np.asarray(
+        experimental_stds
+    )
+
+    # ------------------------------------------------------------
+    # Figure
+    # ------------------------------------------------------------
+
+    fig, ax = plt.subplots(
+        figsize=(7, 4.8)
+    )
+
+    ax.plot(
+        p_values,
+        theoretical_detection,
+        linestyle="--",
+        label=(
+            r"Theoretical probability of "
+            r"at least one audit: "
+            r"$1-(1-p)^{20}$"
+        ),
+    )
+
+    ax.errorbar(
+        p_values,
+        experimental_means,
+        yerr=experimental_stds,
+        marker="o",
+        capsize=4,
+        label="Observed random-audit detection",
+    )
+
+    # Highlight main operating point
+    main_theoretical = (
+        1.0
+        - (
+            1.0
+            - MAIN_AUDIT_PROBABILITY
+        ) ** ROUNDS
+    )
+
+    ax.scatter(
+        [MAIN_AUDIT_PROBABILITY],
+        [main_theoretical],
+        s=75,
+        zorder=4,
+        label=(
+            f"Chosen setting: p={MAIN_AUDIT_PROBABILITY:g}"
+        ),
+    )
+
+    ax.annotate(
+        f"{main_theoretical:.1%}",
+        xy=(
+            MAIN_AUDIT_PROBABILITY,
+            main_theoretical,
+        ),
+        xytext=(8, -15),
+        textcoords="offset points",
+        fontsize=9,
+    )
+
+    ax.set_xlabel(
+        "Random audit probability $p$"
+    )
+
+    ax.set_ylabel(
+        "Probability attacker is audited at least once"
+    )
+
+    ax.set_title(
+        f"Cumulative protection from probabilistic auditing "
+        f"over {ROUNDS} rounds"
+    )
+
+    ax.set_xlim(
+        0,
+        1.05,
+    )
+
+    ax.set_ylim(
+        0,
+        1.05,
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+    )
+
+    ax.legend(
+        fontsize=8.5,
+    )
+
+    save_figure(
+        fig,
+        "plot5_combined_defense",
+    )
+
+    print(
+        "\nCumulative random-audit detection:"
+    )
+
+    for p, theoretical, observed, std in zip(
+        p_values,
+        theoretical_detection,
+        experimental_means,
+        experimental_stds,
+    ):
+        print(
+            f"  p={p:.2f}: "
+            f"theoretical={theoretical:.3f}, "
+            f"observed={observed:.3f} "
+            f"± {std:.3f}"
+        )
+
+
+# ================================================================
+# Main
+# ================================================================
 
 def main():
 
@@ -596,13 +1296,54 @@ def main():
         "axes.titlesize": 12,
     })
 
-    histories = load_all_seeds()
+    results = load_all_results()
 
-    plot_honest_ranking_correlation(histories)
-    plot_single_attacker_strength_sweep(histories)
-    plot_multi_attacker_contribution(histories)
+    print("\n" + "=" * 70)
+    print("Generating figures")
+    print("=" * 70)
 
-    print(f"\nAll figures saved to: {FIGURES_DIR.resolve()}")
+    print(
+        "\n[1/5] Attack effectiveness"
+    )
+    plot_attack_effectiveness(
+        results
+    )
+
+    print(
+        "\n[2/5] Detection vs random audit probability"
+    )
+    plot_detection_vs_audit_probability(
+        results
+    )
+
+    print(
+        "\n[3/5] Audit cost trade-off"
+    )
+    plot_audit_cost(
+        results
+    )
+
+    print(
+        "\n[4/5] Threshold-only security/overhead trade-off"
+    )
+    plot_threshold_tradeoff(
+        results
+    )
+
+    print(
+        "\n[5/5] Combined defense"
+    )
+    plot_combined_detection(
+        results
+    )
+
+    print("\n" + "=" * 70)
+    print("All figures generated.")
+    print(
+        f"Output directory: "
+        f"{FIGURES_DIR.resolve()}"
+    )
+    print("=" * 70)
 
 
 if __name__ == "__main__":

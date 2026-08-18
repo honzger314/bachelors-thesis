@@ -7,15 +7,11 @@ class Coordinator:
     """
     Coordinator for TRIP-Shapley contribution propagation.
 
-    Tracks three versions:
+    Tracks two versions:
 
         original:
             No defense.
             Propagates the reported LCV unchanged.
-
-        modified:
-            Baseline defense.
-            Removes the client's own contribution before propagation.
 
         audited:
             Proposed defense.
@@ -36,7 +32,9 @@ class Coordinator:
         Number of clients in the DFL network.
 
     audit_probability:
-        Probability p of a random audit.
+        Probability p of a random audit. p=0 disables random
+        auditing entirely (only the outlier heuristic, if enabled,
+        can trigger an audit).
 
     outlier_threshold:
         Threshold used by the heuristic outlier detector.
@@ -48,6 +46,27 @@ class Coordinator:
             A report is considered suspicious if at least one
             reported contribution differs from the robust estimated
             normal contribution by more than this threshold.
+
+    audit_threshold:
+        Acceptance tolerance used when comparing a reported LCV
+        against the ground truth during an audit.
+
+        IMPORTANT: this is a NUMERICAL PRECISION tolerance, not the
+        economically-derived threshold from the profitability
+        analysis (t <= p*e / (n*(1-p))). Keeping this tiny is what
+        makes that analysis valid: it guarantees any real,
+        deliberate manipulation - not just ones exceeding some
+        larger "safe" margin - is corrected with certainty whenever
+        audited. If this parameter were instead set to the derived
+        economic threshold, an attacker who manipulates by exactly
+        that amount would be accepted-as-reported even when audited,
+        making the manipulation risk-free regardless of audit
+        probability (since "accepted" means the reported/fake value
+        is what gets propagated). The economic threshold is computed
+        separately (DFLSimulator.compute_theoretical_thresholds) as
+        a theoretical reference value to compare against this
+        tolerance - it is never used as a literal accept/reject
+        boundary anywhere in this class.
 
     seed:
         Random seed for probabilistic auditing.
@@ -65,6 +84,7 @@ class Coordinator:
         num_clients,
         audit_probability=0.0,
         outlier_threshold=None,
+        audit_threshold=1e-6,
         seed=None,
     ):
 
@@ -76,6 +96,7 @@ class Coordinator:
 
         self.audit_probability = audit_probability
         self.outlier_threshold = outlier_threshold
+        self.audit_threshold = audit_threshold
 
         # Validate audit probability.
         if not 0.0 <= audit_probability <= 1.0:
@@ -96,6 +117,11 @@ class Coordinator:
                     "or None."
                 )
 
+        if audit_threshold < 0.0:
+            raise ValueError(
+                "audit_threshold must be non-negative."
+            )
+
         # Independent RNG for this coordinator.
         self.rng = random.Random(seed)
 
@@ -104,11 +130,6 @@ class Coordinator:
         # -----------------------------------------------------
 
         self.original_contributions = {
-            i: torch.zeros(num_clients)
-            for i in range(num_clients)
-        }
-
-        self.modified_contributions = {
             i: torch.zeros(num_clients)
             for i in range(num_clients)
         }
@@ -319,13 +340,7 @@ class Coordinator:
         """
 
         # =====================================================
-        # IMPORTANT:
-        #
-        # None means:
-        #     NO HEURISTIC
-        #
-        # We return immediately and do not perform any
-        # contribution estimation or outlier comparisons.
+        # None means NO HEURISTIC. Return immediately.
         # =====================================================
 
         if self.outlier_threshold is None:
@@ -350,8 +365,6 @@ class Coordinator:
                 for client_id in reported_lcv_dict
             }
 
-            # There is no estimated contribution because
-            # the heuristic was not run.
             estimated_contributions = torch.zeros(
                 self.num_clients
             )
@@ -378,10 +391,6 @@ class Coordinator:
         entry_outliers = {}
         max_deviations = {}
 
-        # -----------------------------------------------------
-        # Check every report.
-        # -----------------------------------------------------
-
         for reporter_id, lcv in (
             reported_lcv_dict.items()
         ):
@@ -407,7 +416,6 @@ class Coordinator:
                     ]
                 )
 
-                # Sparse zero entries are ignored.
                 if value == 0.0:
 
                     entry_outliers[
@@ -476,41 +484,27 @@ class Coordinator:
 
         Both triggers are tracked separately.
 
-        Audit reasons:
-
-            None
-            "random"
-            "outlier"
-            "both"
+        Audit reasons: None, "random", "outlier", "both".
 
         If audited, the reported LCV is compared against the
-        deterministic ground-truth LCV.
+        deterministic ground-truth LCV using self.audit_threshold
+        (a tiny numerical-precision tolerance - see class docstring
+        for why this must stay small rather than being set to the
+        derived economic threshold).
 
         A dishonest report is replaced by the ground-truth LCV,
         with the attacker's own contribution set to zero.
         """
-
-        # -----------------------------------------------------
-        # Random audit
-        # -----------------------------------------------------
 
         random_audit = (
             self.rng.random()
             < self.audit_probability
         )
 
-        # -----------------------------------------------------
-        # Final audit decision
-        # -----------------------------------------------------
-
         audited = (
             forced_audit
             or random_audit
         )
-
-        # -----------------------------------------------------
-        # Determine audit reason
-        # -----------------------------------------------------
 
         if forced_audit and random_audit:
 
@@ -538,19 +532,12 @@ class Coordinator:
                 reported_lcv.clone(),
                 {
                     "audited": False,
-
                     "random_audit": False,
-
                     "outlier_audit": False,
-
                     "accepted": None,
-
                     "flagged": False,
-
                     "audit_reason": None,
-
                     "max_deviation": None,
-
                     "outlier_deviation":
                         outlier_deviation,
                 },
@@ -569,16 +556,10 @@ class Coordinator:
             deviation.max()
         )
 
-        numerical_tolerance = 1e-7
-
         accepted = (
             max_deviation
-            <= numerical_tolerance
+            <= self.audit_threshold
         )
-
-        # -----------------------------------------------------
-        # Honest report
-        # -----------------------------------------------------
 
         if accepted:
 
@@ -586,33 +567,24 @@ class Coordinator:
                 reported_lcv.clone(),
                 {
                     "audited": True,
-
                     "random_audit":
                         random_audit,
-
                     "outlier_audit":
                         forced_audit,
-
                     "accepted": True,
-
                     "flagged": False,
-
                     "audit_reason":
                         audit_reason,
-
                     "max_deviation":
                         max_deviation,
-
                     "outlier_deviation":
                         outlier_deviation,
                 },
             )
 
         # -----------------------------------------------------
-        # Dishonest report
-        #
-        # Replace with recomputed ground truth and remove the
-        # attacker's reward for this round.
+        # Dishonest report: replace with ground truth, zero the
+        # attacker's own reward for this round.
         # -----------------------------------------------------
 
         corrected_lcv = (
@@ -627,23 +599,16 @@ class Coordinator:
             corrected_lcv,
             {
                 "audited": True,
-
                 "random_audit":
                     random_audit,
-
                 "outlier_audit":
                     forced_audit,
-
                 "accepted": False,
-
                 "flagged": True,
-
                 "audit_reason":
                     audit_reason,
-
                 "max_deviation":
                     max_deviation,
-
                 "outlier_deviation":
                     outlier_deviation,
             },
@@ -660,30 +625,12 @@ class Coordinator:
         network,
     ):
         """
-        Update all contribution versions.
+        Update both contribution versions (original, audited).
 
-        If outlier_threshold is None, only probabilistic
-        auditing is performed.
-
-        If outlier_threshold is not None, suspicious reports
-        are additionally forced into the audit process.
+        If outlier_threshold is None, only probabilistic auditing
+        is performed. If outlier_threshold is not None, suspicious
+        reports are additionally forced into the audit process.
         """
-
-        if self.outlier_threshold is None:
-
-            heuristic_status = "disabled"
-
-        else:
-
-            heuristic_status = "enabled"
-
-        print(
-            "[Coordinator] Updating "
-            f"{len(reported_lcv_dict)} clients "
-            f"(p={self.audit_probability}, "
-            f"threshold={self.outlier_threshold}, "
-            f"heuristic={heuristic_status})"
-        )
 
         # =====================================================
         # 1. Outlier detection
@@ -702,47 +649,30 @@ class Coordinator:
             client_outliers.values()
         )
 
-        # -----------------------------------------------------
-        # Save detection information
-        # -----------------------------------------------------
-
         self.outlier_history.append(
             {
                 "estimated_contributions":
                     estimated_contributions.clone(),
-
                 "client_outliers":
-                    copy.deepcopy(
-                        client_outliers
-                    ),
-
+                    copy.deepcopy(client_outliers),
                 "entry_outliers":
-                    copy.deepcopy(
-                        entry_outliers
-                    ),
-
+                    copy.deepcopy(entry_outliers),
                 "max_deviations":
-                    copy.deepcopy(
-                        max_deviations
-                    ),
-
+                    copy.deepcopy(max_deviations),
                 "num_outliers":
                     num_outliers,
-
                 "outlier_threshold":
                     self.outlier_threshold,
-
                 "heuristic_enabled":
                     self.outlier_threshold is not None,
             }
         )
 
         # =====================================================
-        # 2. Propagate all three versions
+        # 2. Propagate both versions
         # =====================================================
 
         new_original = {}
-        new_modified = {}
         new_audited = {}
 
         round_audit_log = {}
@@ -758,7 +688,7 @@ class Coordinator:
             )
 
             # -------------------------------------------------
-            # Version 1: Original
+            # Version 1: Original (no defense)
             # -------------------------------------------------
 
             new_original[
@@ -771,63 +701,28 @@ class Coordinator:
             )
 
             # -------------------------------------------------
-            # Version 2: Modified baseline
-            # -------------------------------------------------
-
-            modified_lcv = (
-                reported_lcv.clone()
-            )
-
-            modified_lcv[
-                client_id
-            ] = 0.0
-
-            new_modified[
-                client_id
-            ] = self.update_single(
-                client_id,
-                modified_lcv,
-                network,
-                self.modified_contributions,
-            )
-
-            # -------------------------------------------------
-            # Version 3: Audited protocol
+            # Version 2: Audited protocol
             # -------------------------------------------------
 
             forced_audit = (
-                client_outliers[
-                    client_id
-                ]
+                client_outliers[client_id]
             )
 
             outlier_deviation = (
-                max_deviations[
-                    client_id
-                ]
+                max_deviations[client_id]
             )
 
             audited_lcv, outcome = (
                 self._audit_client(
                     client_id=client_id,
-
-                    ground_truth_lcv=
-                        ground_truth_lcv,
-
-                    reported_lcv=
-                        reported_lcv,
-
-                    forced_audit=
-                        forced_audit,
-
-                    outlier_deviation=
-                        outlier_deviation,
+                    ground_truth_lcv=ground_truth_lcv,
+                    reported_lcv=reported_lcv,
+                    forced_audit=forced_audit,
+                    outlier_deviation=outlier_deviation,
                 )
             )
 
-            round_audit_log[
-                client_id
-            ] = outcome
+            round_audit_log[client_id] = outcome
 
             new_audited[
                 client_id
@@ -842,21 +737,10 @@ class Coordinator:
         # 3. Commit state
         # =====================================================
 
-        self.original_contributions = (
-            new_original
-        )
+        self.original_contributions = new_original
+        self.audited_contributions = new_audited
 
-        self.modified_contributions = (
-            new_modified
-        )
-
-        self.audited_contributions = (
-            new_audited
-        )
-
-        self.audit_log.append(
-            round_audit_log
-        )
+        self.audit_log.append(round_audit_log)
 
         print(
             "[Coordinator] Round propagation "
@@ -875,21 +759,12 @@ class Coordinator:
         """
         Return one client's contribution vector.
 
-        method:
-            "original"
-            "modified"
-            "audited"
+        method: "original" or "audited"
         """
 
         mapping = {
-            "original":
-                self.original_contributions,
-
-            "modified":
-                self.modified_contributions,
-
-            "audited":
-                self.audited_contributions,
+            "original": self.original_contributions,
+            "audited": self.audited_contributions,
         }
 
         if method not in mapping:
@@ -898,24 +773,16 @@ class Coordinator:
                 f"Unknown method: {method}"
             )
 
-        return mapping[
-            method
-        ][client_id]
+        return mapping[method][client_id]
 
     def get_all_contributions(self):
         """
-        Return all current contribution states.
+        Return both current contribution states.
         """
 
         return {
-            "original":
-                self.original_contributions,
-
-            "modified":
-                self.modified_contributions,
-
-            "audited":
-                self.audited_contributions,
+            "original": self.original_contributions,
+            "audited": self.audited_contributions,
         }
 
     def get_audit_log(self):
