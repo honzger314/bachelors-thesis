@@ -260,6 +260,13 @@ class DFLSimulator:
                 "strength": 1.0,
             },
 
+            "byzantine_collusion": {
+                "type": "byzantine_collusion",
+                "attacker_ids": {1, 2, 3},
+                "target_id": 2,
+                "strength": 1.0,
+            },
+
             "stealth_half": {
                 "type": "stealth_half",
                 "attacker_ids": {self.single_attacker_id},
@@ -272,6 +279,48 @@ class DFLSimulator:
                 "strength": None,
             },
         }
+
+        # -----------------------------------------------------
+        # Fixed-magnitude attacks corresponding to every
+        # outlier threshold and half of every threshold.
+        #
+        # These attacks are independent of the threshold used
+        # by the coordinator. Therefore, each fixed attack is
+        # evaluated against EVERY threshold, including None.
+        #
+        # Example:
+        #   fixed_full_0.05 attacks with value 0.05
+        #   fixed_half_0.05 attacks with value 0.025
+        #
+        # This lets us evaluate cross-threshold behavior:
+        # e.g. whether a threshold of 0.01 catches an attack
+        # of magnitude 0.05.
+        # -----------------------------------------------------
+
+        for threshold in self.outlier_thresholds:
+
+            if threshold is None:
+                continue
+
+            self.scenarios[
+                f"fixed_full_{threshold}"
+            ] = {
+                "type": "fixed",
+                "attacker_ids": {
+                    self.single_attacker_id
+                },
+                "strength": float(threshold),
+            }
+
+            self.scenarios[
+                f"fixed_half_{threshold}"
+            ] = {
+                "type": "fixed",
+                "attacker_ids": {
+                    self.single_attacker_id
+                },
+                "strength": float(threshold) / 2.0,
+            }
 
         # -----------------------------------------------------
         # Coordinators
@@ -518,8 +567,23 @@ class DFLSimulator:
 
             v = vec.clone()
 
-            if cid in malicious_ids:
+            if scenario["type"] == "byzantine_collusion":
 
+                # All colluding attackers report the same false
+                # value for the target client, rather than for
+                # themselves.
+                target_id = scenario["target_id"]
+
+                if cid in malicious_ids:
+
+                    attack_value = scenario["strength"]
+
+                    v[target_id] = attack_value
+
+            elif cid in malicious_ids:
+
+                # Existing attacks manipulate the attacker's own
+                # contribution entry.
                 honest_value = float(vec[cid])
 
                 attack_value = self._get_attack_strength(
