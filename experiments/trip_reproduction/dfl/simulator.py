@@ -298,28 +298,19 @@ class DFLSimulator:
         # -----------------------------------------------------
 
         for threshold in self.outlier_thresholds:
-
             if threshold is None:
                 continue
 
-            self.scenarios[
-                f"fixed_full_{threshold}"
-            ] = {
-                "type": "fixed",
-                "attacker_ids": {
-                    self.single_attacker_id
-                },
-                "strength": float(threshold),
+            self.scenarios[f"stealth_fixed_half_{threshold}"] = {
+                "type": "stealth_fixed_half",
+                "attacker_ids": {self.single_attacker_id},
+                "strength": float(threshold) / 2.0,
             }
 
-            self.scenarios[
-                f"fixed_half_{threshold}"
-            ] = {
-                "type": "fixed",
-                "attacker_ids": {
-                    self.single_attacker_id
-                },
-                "strength": float(threshold) / 2.0,
+            self.scenarios[f"stealth_fixed_full_{threshold}"] = {
+                "type": "stealth_fixed_full",
+                "attacker_ids": {self.single_attacker_id},
+                "strength": float(threshold),
             }
 
         # -----------------------------------------------------
@@ -495,6 +486,15 @@ class DFLSimulator:
         ):
             return False
 
+        if (
+            scenario["type"] in (
+                "stealth_fixed_half",
+                "stealth_fixed_full",
+            )
+            and outlier_threshold is not None
+        ):
+            return False
+
         return True
 
     # =========================================================
@@ -527,6 +527,12 @@ class DFLSimulator:
 
         if scenario_type == "fixed":
             return scenario["strength"]
+
+        if scenario_type in (
+            "stealth_fixed_half",
+            "stealth_fixed_full",
+        ):
+            return honest_value + scenario["strength"]
 
         if outlier_threshold is None:
             # Should be unreachable - _is_scenario_threshold_active
