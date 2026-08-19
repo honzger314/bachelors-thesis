@@ -742,11 +742,6 @@ class Coordinator:
 
         self.audit_log.append(round_audit_log)
 
-        print(
-            "[Coordinator] Round propagation "
-            "finished"
-        )
-
     # =========================================================
     # Accessors
     # =========================================================
