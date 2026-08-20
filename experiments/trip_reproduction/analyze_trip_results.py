@@ -9,7 +9,7 @@ import numpy as np
 # Configuration
 # ================================================================
 
-RESULTS_DIR = Path("results3")
+RESULTS_DIR = Path("results4")
 FIGURES_DIR = Path("figures")
 FIGURES_DIR.mkdir(exist_ok=True)
 
@@ -26,7 +26,7 @@ MAIN_AUDIT_PROBABILITY = 0.20
 MAIN_THRESHOLD = 0.01
 
 AUDIT_PROBABILITIES = [0.0, 0.05, 0.10, 0.20, 0.50, 1.00]
-THRESHOLDS = [0.001, 0.005, 0.01, 0.05, 0.10]
+THRESHOLDS = [0.001, 0.005, 0.01, 0.02, 0.05, 0.10]
 ATTACK_STRENGTHS = [1, 5, 10, 20, 50]
 
 STEALTH_SCENARIOS = [
@@ -826,52 +826,48 @@ def plot_audit_only_attack(results):
 
 def plot_combined_defense(results):
     """
-    Compares the four defense configurations under the same fixed
-    attack.
+    Compares the four defense configurations against the same
+    deliberately constructed stealth attack.
 
-    Attack:
-        single_s1
-
-    Representative operating point:
-        p = MAIN_AUDIT_PROBABILITY
-        threshold = MAIN_THRESHOLD
+    The stealth attack is designed specifically for the main
+    outlier threshold. This allows us to evaluate whether
+    probabilistic auditing provides protection when the attack
+    is specifically constructed to evade the outlier detector.
 
     Configurations:
         1. No defense
         2. Outlier-only
         3. Audit-only
         4. Combined
-
-    The same attack is used in every configuration so that the
-    comparison isolates the effect of the defense mechanism.
     """
 
-    scenario = "single_s1"
+    threshold = MAIN_THRESHOLD
+    p = MAIN_AUDIT_PROBABILITY
 
     configurations = [
         (
             "No defense",
-            "original",
+            f"stealth_fixed_full_{threshold}",
             0.0,
             None,
         ),
         (
             "Outlier-only",
-            "audited",
+            "stealth_full",
             0.0,
-            MAIN_THRESHOLD,
+            threshold,
         ),
         (
             "Audit-only",
-            "audited",
-            MAIN_AUDIT_PROBABILITY,
+            f"stealth_fixed_full_{threshold}",
+            p,
             None,
         ),
         (
             "Combined",
-            "audited",
-            MAIN_AUDIT_PROBABILITY,
-            MAIN_THRESHOLD,
+            "stealth_full",
+            p,
+            threshold,
         ),
     ]
 
@@ -884,18 +880,18 @@ def plot_combined_defense(results):
 
     for (
         label,
-        version,
-        p,
-        threshold,
+        scenario,
+        audit_probability,
+        outlier_threshold,
     ) in configurations:
 
         values = [
             get_final_contribution(
                 history,
                 scenario,
-                p,
-                threshold,
-                version,
+                audit_probability,
+                outlier_threshold,
+                "audited",
                 history["single_attacker_id"],
             )
             for history in results
@@ -926,8 +922,8 @@ def plot_combined_defense(results):
         get_final_contribution(
             history,
             "clean",
-            MAIN_AUDIT_PROBABILITY,
-            MAIN_THRESHOLD,
+            p,
+            threshold,
             "audited",
             history["single_attacker_id"],
         )
@@ -942,9 +938,11 @@ def plot_combined_defense(results):
     )
 
     print(
-        f"Operating point: "
-        f"p={MAIN_AUDIT_PROBABILITY}, "
-        f"threshold={MAIN_THRESHOLD}"
+        f"Stealth attack calibrated for threshold={threshold}"
+    )
+
+    print(
+        f"Audit probability: p={p}"
     )
 
     # ------------------------------------------------------------
@@ -980,9 +978,8 @@ def plot_combined_defense(results):
 
     ax.set_title(
         "Figure 5: Comparison of defense configurations (RQ3)\n"
-        f"Fixed attack (strength 1), "
-        f"p={MAIN_AUDIT_PROBABILITY}, "
-        f"threshold={MAIN_THRESHOLD}"
+        f"Stealth attack calibrated for threshold={threshold}, "
+        f"p={p}"
     )
 
     ax.grid(
@@ -1013,6 +1010,206 @@ def plot_combined_defense(results):
         "figure5_combined_defense",
     )
 
+
+def plot_byzantine_attack(results):
+    """
+    Compares the four defense configurations against the Byzantine
+    collusion attack.
+
+    Byzantine attack:
+        Clients 1, 2, and 3 collude and report an inflated
+        contribution for the middle client (client 2).
+
+    The plotted value is the final contribution/reward assigned
+    to the middle malicious client.
+
+    The same attack and threshold are used across all four
+    defense
+    configurations.
+    """
+
+    scenario = "byzantine_collusion"
+
+    # Middle client of the three-client colluding group.
+    byzantine_target = 2
+
+    configurations = [
+        (
+            "No defense",
+            "original",
+            0.0,
+            MAIN_THRESHOLD,
+        ),
+        (
+            "Outlier-only",
+            "audited",
+            0.0,
+            MAIN_THRESHOLD,
+        ),
+        (
+            "Audit-only",
+            "audited",
+            MAIN_AUDIT_PROBABILITY,
+            MAIN_THRESHOLD,
+        ),
+        (
+            "Combined",
+            "audited",
+            MAIN_AUDIT_PROBABILITY,
+            MAIN_THRESHOLD,
+        ),
+    ]
+
+    means = []
+    stds = []
+
+    # ------------------------------------------------------------
+    # Byzantine target contribution for each configuration
+    # ------------------------------------------------------------
+
+    for (
+        label,
+        version,
+        p,
+        threshold,
+    ) in configurations:
+
+        values = [
+            get_final_contribution(
+                history,
+                scenario,
+                p,
+                threshold,
+                version,
+                byzantine_target,
+            )
+            for history in results
+        ]
+
+        mean, std = mean_std(values)
+
+        means.append(mean)
+        stds.append(std)
+
+    # ------------------------------------------------------------
+    # Print numerical values
+    # ------------------------------------------------------------
+
+    print_series_table(
+        "FIGURE 6 - Byzantine collusion comparison",
+        [c[0] for c in configurations],
+        means,
+        stds,
+        "Configuration",
+    )
+
+    # ------------------------------------------------------------
+    # Honest baseline
+    # ------------------------------------------------------------
+    #
+    # For comparison, obtain the genuine contribution of client 2
+    # in the clean scenario.
+    # ------------------------------------------------------------
+
+    honest_values = [
+        get_final_contribution(
+            history,
+            "clean",
+            MAIN_AUDIT_PROBABILITY,
+            MAIN_THRESHOLD,
+            "audited",
+            byzantine_target,
+        )
+        for history in results
+    ]
+
+    honest_mean, honest_std = mean_std(
+        honest_values
+    )
+
+    print(
+        f"Honest baseline for client {byzantine_target}: "
+        f"{honest_mean:.6f} ± {honest_std:.6f}"
+    )
+
+    print(
+        f"Byzantine attackers: clients 1, 2, 3 | "
+        f"target client: {byzantine_target}"
+    )
+
+    print(
+        f"Operating point: "
+        f"p={MAIN_AUDIT_PROBABILITY}, "
+        f"threshold={MAIN_THRESHOLD}"
+    )
+
+    # ------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------
+
+    fig, ax = plt.subplots(figsize=(8.0, 5.0))
+
+    x = np.arange(
+        len(configurations)
+    )
+
+    ax.bar(
+        x,
+        means,
+        yerr=stds,
+        capsize=4,
+    )
+
+    ax.axhline(
+        honest_mean,
+        linestyle=":",
+        label="Honest baseline",
+    )
+
+    ax.set_xticks(x)
+
+    ax.set_xticklabels(
+        [c[0] for c in configurations]
+    )
+
+    ax.set_ylabel(
+        r"Final target contribution $\phi_2^{(T)}(2)$"
+    )
+
+    ax.set_title(
+        "Figure 6: Byzantine collusion attack\n"
+        f"Clients 1, 2, 3 collude on client 2, "
+        f"p={MAIN_AUDIT_PROBABILITY}, "
+        f"threshold={MAIN_THRESHOLD}"
+    )
+
+    ax.grid(
+        True,
+        alpha=0.3,
+        axis="y",
+    )
+
+    ax.legend()
+
+    # ------------------------------------------------------------
+    # Value labels
+    # ------------------------------------------------------------
+
+    for xi, mean in zip(x, means):
+
+        ax.annotate(
+            f"{mean:.3f}",
+            xy=(xi, mean),
+            xytext=(0, 5),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8.5,
+        )
+
+    save_figure(
+        fig,
+        "figure6_byzantine_attack",
+    )
 
 # ================================================================
 # Tables (printed only - closed-form / confirmatory, not worth a
@@ -1129,6 +1326,8 @@ def main():
 
     print("\n[5/5] Combined defense")
     plot_combined_defense(results)
+
+    plot_byzantine_attack(results)
 
     print("\n" + "=" * 70)
     print("All figures generated.")
