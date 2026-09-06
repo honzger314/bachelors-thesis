@@ -217,7 +217,7 @@ def main():
     ROUNDS = 20
     LOCAL_EPOCHS = 1
     BATCH_SIZE = 64
-    TOPOLOGY = "ring"
+    TOPOLOGY = "watts_strogatz"
 
     SEEDS = [1, 2, 3]
 

@@ -1,4 +1,5 @@
 import random
+import networkx as nx
 
 class Network:
     """
@@ -81,12 +82,48 @@ class Network:
 
             return self.create_random()
 
+        elif self.topology == "watts_strogatz":
+
+            return self.create_watts_strogatz()
+
         else:
             raise ValueError(
                 f"Unknown topology: {self.topology}"
             )
 
+    def create_watts_strogatz(self, degree=4, rewiring_probability=0.3):
+        """
+        Watts-Strogatz small-world topology.
 
+        degree:
+            Number of neighbors per client before rewiring.
+            Must be even.
+
+        rewiring_probability:
+            Probability of rewiring each edge.
+        """
+
+        if degree >= self.num_clients:
+            raise ValueError(
+                "Watts-Strogatz degree must be smaller than num_clients."
+            )
+
+        if degree % 2 != 0:
+            raise ValueError(
+                "Watts-Strogatz degree must be even."
+            )
+
+        graph = nx.watts_strogatz_graph(
+            n=self.num_clients,
+            k=degree,
+            p=rewiring_probability,
+            seed=random.randint(0, 2**32 - 1),
+        )
+
+        return {
+            i: list(graph.neighbors(i))
+            for i in range(self.num_clients)
+        }
 
     def create_ring(self):
         """

@@ -1,6 +1,7 @@
 import pickle
 from pathlib import Path
 
+import os
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -310,29 +311,47 @@ def save_figure(fig, filename):
 
 
 # ================================================================
+# Helper: write PGFPlots data
+# ================================================================
+
+def write_dat(filename, header, rows):
+    """
+    Write numerical/categorical experiment results in a format
+    directly usable by pgfplots.
+
+    Example:
+        write_dat(
+            "figures/data/example.dat",
+            ["x", "mean", "std"],
+            [(1, 0.5, 0.02), (2, 0.7, 0.03)]
+        )
+    """
+    os.makedirs("figures/data", exist_ok=True)
+
+    path = os.path.join("figures/data", filename)
+
+    with open(path, "w") as f:
+        f.write(" ".join(header) + "\n")
+
+        for row in rows:
+            formatted = []
+
+            for value in row:
+                if isinstance(value, str):
+                    formatted.append(value)
+                else:
+                    formatted.append(f"{value:.8f}")
+
+            f.write(" ".join(formatted) + "\n")
+
+    print(f"Saved data: {path}")
+
+
+# ================================================================
 # Figure 1 (RQ1) - Attack works without any defense
 # ================================================================
 
 def plot_attack_without_defense(results):
-    """
-    Shows that the attacker can inflate its final self-contribution
-    when neither outlier detection nor auditing is active.
-
-    X-axis:
-        attack strength
-
-    Y-axis:
-        final attacker self-contribution
-
-    Configuration:
-        original
-        p = 0
-        threshold = MAIN_THRESHOLD
-
-    The threshold value is irrelevant here because the original
-    mechanism does not apply the defense. We nevertheless use the
-    same stored scenario key consistently.
-    """
 
     attacker_id = results[0]["single_attacker_id"]
 
@@ -382,8 +401,36 @@ def plot_attack_without_defense(results):
     )
 
     print(
-        f"Honest baseline: {honest_mean:.6f} ± {honest_std:.6f}"
+        f"Honest baseline: "
+        f"{honest_mean:.6f} ± {honest_std:.6f}"
     )
+
+    # ------------------------------------------------------------
+    # Export PGFPlots data
+    # ------------------------------------------------------------
+
+    write_dat(
+        "figure1_attack_without_defense.dat",
+        ["strength", "mean", "std"],
+        [
+            (strength, mean, std)
+            for strength, mean, std in zip(
+                ATTACK_STRENGTHS,
+                means,
+                stds,
+            )
+        ],
+    )
+
+    write_dat(
+        "figure1_attack_without_defense_honest.dat",
+        ["mean", "std"],
+        [(honest_mean, honest_std)],
+    )
+
+    # ------------------------------------------------------------
+    # Original Python plot
+    # ------------------------------------------------------------
 
     fig, ax = plt.subplots(figsize=(7.5, 5.0))
 
@@ -450,24 +497,10 @@ def plot_attack_without_defense(results):
 # ================================================================
 
 def plot_outlier_only_stealth(results):
-    """
-    Shows the attacker's final contribution against calibrated
-    stealth attacks when only the statistical outlier detector is
-    active.
-
-    p = 0
-    version = audited
-
-    The stealth attack is calibrated for each threshold. Therefore
-    the plot asks:
-
-        "Can the attacker still obtain a large contribution while
-         staying below the detector's threshold?"
-
-    Both stealth_half and stealth_full are shown.
-    """
 
     fig, ax = plt.subplots(figsize=(7.5, 5.0))
+
+    exported = []
 
     for scenario, label in STEALTH_SCENARIOS:
 
@@ -510,7 +543,32 @@ def plot_outlier_only_stealth(results):
             label=label,
         )
 
-    # Honest reference at the representative threshold
+        exported.append(
+            (threshold, means, stds)
+        )
+
+        # Export separately for each stealth attack
+        safe_label = (
+            scenario.replace("-", "_")
+        )
+
+        write_dat(
+            f"figure2_{safe_label}.dat",
+            ["threshold", "mean", "std"],
+            [
+                (threshold, mean, std)
+                for threshold, mean, std in zip(
+                    THRESHOLDS,
+                    means,
+                    stds,
+                )
+            ],
+        )
+
+    # ------------------------------------------------------------
+    # Honest reference
+    # ------------------------------------------------------------
+
     honest_values = [
         get_final_contribution(
             history,
@@ -523,14 +581,22 @@ def plot_outlier_only_stealth(results):
         for history in results
     ]
 
-    honest_mean, _ = mean_std(honest_values)
-
     honest_mean, honest_std = mean_std(honest_values)
 
     print(
         f"Figure 2 honest baseline: "
         f"{honest_mean:.6f} ± {honest_std:.6f}"
     )
+
+    write_dat(
+        "figure2_honest.dat",
+        ["mean", "std"],
+        [(honest_mean, honest_std)],
+    )
+
+    # ------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------
 
     ax.axhline(
         honest_mean,
@@ -549,8 +615,7 @@ def plot_outlier_only_stealth(results):
     )
 
     ax.set_title(
-        "Figure 2: Outlier detection alone against stealth attacks "
-        "(RQ3)"
+        "Figure 2: Outlier detection alone against stealth attacks (RQ3)"
     )
 
     ax.grid(
@@ -572,25 +637,6 @@ def plot_outlier_only_stealth(results):
 # ================================================================
 
 def plot_honest_false_positives(results):
-    """
-    Shows how often honest reports are flagged by the statistical
-    outlier detector as the detection threshold changes.
-
-    This is specifically the OUTLIER detector's false-positive
-    behavior.
-
-    p = 0 isolates the outlier detector from probabilistic auditing.
-
-    The measured quantity is:
-
-        honest_outlier_audit_rate
-
-    i.e. the fraction of honest reports that were sent to audit
-    because they were flagged as outliers.
-
-    This is different from false_positive_rate, which measures
-    reports that were ultimately rejected by the audit verification.
-    """
 
     means = []
     stds = []
@@ -619,6 +665,27 @@ def plot_honest_false_positives(results):
         stds,
         "Threshold",
     )
+
+    # ------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------
+
+    write_dat(
+        "figure3_honest_false_positives.dat",
+        ["threshold", "mean", "std"],
+        [
+            (threshold, mean, std)
+            for threshold, mean, std in zip(
+                THRESHOLDS,
+                means,
+                stds,
+            )
+        ],
+    )
+
+    # ------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------
 
     fig, ax = plt.subplots(figsize=(7.5, 5.0))
 
@@ -676,24 +743,6 @@ def plot_honest_false_positives(results):
 # ================================================================
 
 def plot_audit_only_attack(results):
-    """
-    Shows how probabilistic auditing reduces the attacker's final
-    contribution as the audit probability p increases.
-
-    Outlier detection is DISABLED:
-        threshold = None
-
-    This isolates the effect of probabilistic auditing itself.
-
-    Attack:
-        single_s1
-
-    X-axis:
-        random audit probability p
-
-    Y-axis:
-        final attacker self-contribution
-    """
 
     scenario = "single_s1"
 
@@ -702,22 +751,17 @@ def plot_audit_only_attack(results):
 
     for p in AUDIT_PROBABILITIES:
 
-        values = []
-
-        for history in results:
-
-            attacker_id = history["single_attacker_id"]
-
-            values.append(
-                get_final_contribution(
-                    history,
-                    scenario,
-                    p,
-                    None,          # disable outlier detection
-                    "audited",
-                    attacker_id,
-                )
+        values = [
+            get_final_contribution(
+                history,
+                scenario,
+                p,
+                None,
+                "audited",
+                history["single_attacker_id"],
             )
+            for history in results
+        ]
 
         mean, std = mean_std(values)
 
@@ -733,7 +777,7 @@ def plot_audit_only_attack(results):
             history,
             "clean",
             MAIN_AUDIT_PROBABILITY,
-            None,              # no outlier detection
+            None,
             "audited",
             history["single_attacker_id"],
         )
@@ -751,8 +795,33 @@ def plot_audit_only_attack(results):
     )
 
     print(
-        f"Honest baseline: {honest_mean:.6f} ± {honest_std:.6f}"
+        f"Honest baseline: "
+        f"{honest_mean:.6f} ± {honest_std:.6f}"
     )
+
+    # ------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------
+
+    write_dat(
+        "figure4_audit_only_attack.dat",
+        ["p", "mean", "std"],
+        [
+            (p, mean, std)
+            for p, mean, std in zip(
+                AUDIT_PROBABILITIES,
+                means,
+                stds,
+            )
+        ],
+    )
+
+    write_dat(
+        "figure4_audit_only_attack_honest.dat",
+        ["mean", "std"],
+        [(honest_mean, honest_std)],
+    )
+
     # ------------------------------------------------------------
     # Plot
     # ------------------------------------------------------------
@@ -783,8 +852,7 @@ def plot_audit_only_attack(results):
     )
 
     ax.set_title(
-        "Figure 4: Effect of probabilistic auditing on attack reward "
-        "(RQ3)"
+        "Figure 4: Effect of probabilistic auditing on attack reward (RQ3)"
     )
 
     ax.set_xlim(-0.05, 1.05)
@@ -796,10 +864,6 @@ def plot_audit_only_attack(results):
     )
 
     ax.legend()
-
-    # ------------------------------------------------------------
-    # Annotate values
-    # ------------------------------------------------------------
 
     for p, mean in zip(
         AUDIT_PROBABILITIES,
@@ -825,21 +889,6 @@ def plot_audit_only_attack(results):
 # ================================================================
 
 def plot_combined_defense(results):
-    """
-    Compares the four defense configurations against the same
-    deliberately constructed stealth attack.
-
-    The stealth attack is designed specifically for the main
-    outlier threshold. This allows us to evaluate whether
-    probabilistic auditing provides protection when the attack
-    is specifically constructed to evade the outlier detector.
-
-    Configurations:
-        1. No defense
-        2. Outlier-only
-        3. Audit-only
-        4. Combined
-    """
 
     threshold = MAIN_THRESHOLD
     p = MAIN_AUDIT_PROBABILITY
@@ -850,39 +899,40 @@ def plot_combined_defense(results):
             f"stealth_fixed_full_{threshold}",
             0.0,
             None,
+            "original",
         ),
         (
             "Outlier-only",
             "stealth_full",
             0.0,
             threshold,
+            "audited",
         ),
         (
             "Audit-only",
             f"stealth_fixed_full_{threshold}",
             p,
             None,
+            "audited",
         ),
         (
             "Combined",
             "stealth_full",
             p,
             threshold,
+            "audited",
         ),
     ]
 
     means = []
     stds = []
 
-    # ------------------------------------------------------------
-    # Attacker contribution for each configuration
-    # ------------------------------------------------------------
-
     for (
         label,
         scenario,
         audit_probability,
         outlier_threshold,
+        version,
     ) in configurations:
 
         values = [
@@ -891,7 +941,7 @@ def plot_combined_defense(results):
                 scenario,
                 audit_probability,
                 outlier_threshold,
-                "audited",
+                version,
                 history["single_attacker_id"],
             )
             for history in results
@@ -902,16 +952,29 @@ def plot_combined_defense(results):
         means.append(mean)
         stds.append(std)
 
-    # ------------------------------------------------------------
-    # Print numerical values
-    # ------------------------------------------------------------
-
     print_series_table(
-        "FIGURE 5 - Defense configuration comparison",
+        "FIGURE 5 - Comparison of defense configurations",
         [c[0] for c in configurations],
         means,
         stds,
         "Configuration",
+    )
+
+    # ------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------
+
+    write_dat(
+        "figure5_combined_defense.dat",
+        ["configuration", "mean", "std"],
+        [
+            (label, mean, std)
+            for (label, *_), mean, std in zip(
+                configurations,
+                means,
+                stds,
+            )
+        ],
     )
 
     # ------------------------------------------------------------
@@ -937,12 +1000,10 @@ def plot_combined_defense(results):
         f"{honest_mean:.6f} ± {honest_std:.6f}"
     )
 
-    print(
-        f"Stealth attack calibrated for threshold={threshold}"
-    )
-
-    print(
-        f"Audit probability: p={p}"
+    write_dat(
+        "figure5_combined_defense_honest.dat",
+        ["mean", "std"],
+        [(honest_mean, honest_std)],
     )
 
     # ------------------------------------------------------------
@@ -977,9 +1038,7 @@ def plot_combined_defense(results):
     )
 
     ax.set_title(
-        "Figure 5: Comparison of defense configurations (RQ3)\n"
-        f"Stealth attack calibrated for threshold={threshold}, "
-        f"p={p}"
+        "Figure 5: Comparison of defense configurations (RQ3)"
     )
 
     ax.grid(
@@ -990,12 +1049,7 @@ def plot_combined_defense(results):
 
     ax.legend()
 
-    # ------------------------------------------------------------
-    # Value labels
-    # ------------------------------------------------------------
-
     for xi, mean in zip(x, means):
-
         ax.annotate(
             f"{mean:.3f}",
             xy=(xi, mean),
@@ -1011,26 +1065,14 @@ def plot_combined_defense(results):
     )
 
 
+# ================================================================
+# Figure 6 (RQ3) - Byzantine collusion comparison
+# ================================================================
+
 def plot_byzantine_attack(results):
-    """
-    Compares the four defense configurations against the Byzantine
-    collusion attack.
-
-    Byzantine attack:
-        Clients 1, 2, and 3 collude and report an inflated
-        contribution for the middle client (client 2).
-
-    The plotted value is the final contribution/reward assigned
-    to the middle malicious client.
-
-    The same attack and threshold are used across all four
-    defense
-    configurations.
-    """
 
     scenario = "byzantine_collusion"
 
-    # Middle client of the three-client colluding group.
     byzantine_target = 2
 
     configurations = [
@@ -1038,7 +1080,7 @@ def plot_byzantine_attack(results):
             "No defense",
             "original",
             0.0,
-            MAIN_THRESHOLD,
+            None,
         ),
         (
             "Outlier-only",
@@ -1050,7 +1092,7 @@ def plot_byzantine_attack(results):
             "Audit-only",
             "audited",
             MAIN_AUDIT_PROBABILITY,
-            MAIN_THRESHOLD,
+            None,
         ),
         (
             "Combined",
@@ -1062,10 +1104,6 @@ def plot_byzantine_attack(results):
 
     means = []
     stds = []
-
-    # ------------------------------------------------------------
-    # Byzantine target contribution for each configuration
-    # ------------------------------------------------------------
 
     for (
         label,
@@ -1091,12 +1129,8 @@ def plot_byzantine_attack(results):
         means.append(mean)
         stds.append(std)
 
-    # ------------------------------------------------------------
-    # Print numerical values
-    # ------------------------------------------------------------
-
     print_series_table(
-        "FIGURE 6 - Byzantine collusion comparison",
+        "FIGURE 6 - Byzantine collusion attack",
         [c[0] for c in configurations],
         means,
         stds,
@@ -1104,11 +1138,24 @@ def plot_byzantine_attack(results):
     )
 
     # ------------------------------------------------------------
-    # Honest baseline
+    # Export
     # ------------------------------------------------------------
-    #
-    # For comparison, obtain the genuine contribution of client 2
-    # in the clean scenario.
+
+    write_dat(
+        "figure6_byzantine_attack.dat",
+        ["configuration", "mean", "std"],
+        [
+            (label, mean, std)
+            for (label, *_), mean, std in zip(
+                configurations,
+                means,
+                stds,
+            )
+        ],
+    )
+
+    # ------------------------------------------------------------
+    # Honest baseline
     # ------------------------------------------------------------
 
     honest_values = [
@@ -1128,19 +1175,15 @@ def plot_byzantine_attack(results):
     )
 
     print(
-        f"Honest baseline for client {byzantine_target}: "
+        f"Honest baseline for client "
+        f"{byzantine_target}: "
         f"{honest_mean:.6f} ± {honest_std:.6f}"
     )
 
-    print(
-        f"Byzantine attackers: clients 1, 2, 3 | "
-        f"target client: {byzantine_target}"
-    )
-
-    print(
-        f"Operating point: "
-        f"p={MAIN_AUDIT_PROBABILITY}, "
-        f"threshold={MAIN_THRESHOLD}"
+    write_dat(
+        "figure6_byzantine_attack_honest.dat",
+        ["mean", "std"],
+        [(honest_mean, honest_std)],
     )
 
     # ------------------------------------------------------------
@@ -1177,10 +1220,7 @@ def plot_byzantine_attack(results):
     )
 
     ax.set_title(
-        "Figure 6: Byzantine collusion attack\n"
-        f"Clients 1, 2, 3 collude on client 2, "
-        f"p={MAIN_AUDIT_PROBABILITY}, "
-        f"threshold={MAIN_THRESHOLD}"
+        "Figure 6: Byzantine collusion attack"
     )
 
     ax.grid(
@@ -1191,12 +1231,7 @@ def plot_byzantine_attack(results):
 
     ax.legend()
 
-    # ------------------------------------------------------------
-    # Value labels
-    # ------------------------------------------------------------
-
     for xi, mean in zip(x, means):
-
         ax.annotate(
             f"{mean:.3f}",
             xy=(xi, mean),
@@ -1209,6 +1244,347 @@ def plot_byzantine_attack(results):
     save_figure(
         fig,
         "figure6_byzantine_attack",
+    )
+
+
+# ================================================================
+# Figure 7 (RQ3) - Interaction between outlier detection and auditing
+# ================================================================
+
+def plot_p_tau_interaction(results):
+
+    scenario = "stealth_full"
+
+    mean_matrix = np.zeros(
+        (
+            len(THRESHOLDS),
+            len(AUDIT_PROBABILITIES),
+        )
+    )
+
+    std_matrix = np.zeros_like(mean_matrix)
+
+    # ------------------------------------------------------------
+    # Compute mean and standard deviation for every (tau, p)
+    # ------------------------------------------------------------
+
+    for i, threshold in enumerate(THRESHOLDS):
+
+        for j, p in enumerate(AUDIT_PROBABILITIES):
+
+            values = [
+                get_final_contribution(
+                    history,
+                    scenario,
+                    p,
+                    threshold,
+                    "audited",
+                    history["single_attacker_id"],
+                )
+                for history in results
+            ]
+
+            mean, std = mean_std(values)
+
+            mean_matrix[i, j] = mean
+            std_matrix[i, j] = std
+
+    # ------------------------------------------------------------
+    # Print numerical table
+    # ------------------------------------------------------------
+
+    print(
+        "\nFIGURE 7 - Interaction between outlier detection "
+        "and probabilistic auditing"
+    )
+
+    print("\nMean final attacker contribution:")
+
+    header = (
+        f"{'tau':>10}"
+        + "".join(
+            f"{p:>12.2f}"
+            for p in AUDIT_PROBABILITIES
+        )
+    )
+
+    print(header)
+    print("-" * len(header))
+
+    for i, threshold in enumerate(THRESHOLDS):
+
+        row = (
+            f"{threshold:>10.3f}"
+            + "".join(
+                f"{mean_matrix[i, j]:>12.3f}"
+                for j in range(
+                    len(AUDIT_PROBABILITIES)
+                )
+            )
+        )
+
+        print(row)
+
+    # ------------------------------------------------------------
+    # Honest baseline
+    # ------------------------------------------------------------
+
+    honest_values = [
+        get_final_contribution(
+            history,
+            "clean",
+            MAIN_AUDIT_PROBABILITY,
+            MAIN_THRESHOLD,
+            "audited",
+            history["single_attacker_id"],
+        )
+        for history in results
+    ]
+
+    honest_mean, honest_std = mean_std(honest_values)
+
+    print(
+        f"\nHonest baseline: "
+        f"{honest_mean:.6f} ± {honest_std:.6f}"
+    )
+
+    # ------------------------------------------------------------
+    # Export original long-format data
+    #
+    # tau p mean std
+    # ------------------------------------------------------------
+
+    heatmap_rows = []
+
+    for i, threshold in enumerate(THRESHOLDS):
+
+        for j, p in enumerate(AUDIT_PROBABILITIES):
+
+            heatmap_rows.append(
+                (
+                    threshold,
+                    p,
+                    mean_matrix[i, j],
+                    std_matrix[i, j],
+                )
+            )
+
+    write_dat(
+        "figure7_p_tau_interaction.dat",
+        ["tau", "p", "mean", "std"],
+        heatmap_rows,
+    )
+
+    # ------------------------------------------------------------
+    # Export honest baseline
+    # ------------------------------------------------------------
+
+    write_dat(
+        "figure7_p_tau_interaction_honest.dat",
+        ["mean", "std"],
+        [(honest_mean, honest_std)],
+    )
+
+    # ------------------------------------------------------------
+    # Export heatmap data specifically for PGFPlots
+    #
+    # This matches the exact structure used by the working
+    # inline PGFPlots matrix plot:
+    #
+    # x y mean
+    #
+    # x = index of audit probability
+    # y = index of threshold
+    # mean = measured contribution
+    # ------------------------------------------------------------
+
+    heatmap_pgfplots_rows = []
+
+    for i in range(len(THRESHOLDS)):
+
+        for j in range(len(AUDIT_PROBABILITIES)):
+
+            heatmap_pgfplots_rows.append(
+                (
+                    j,
+                    i,
+                    mean_matrix[i, j],
+                )
+            )
+
+    write_dat(
+        "figure7_heatmap.dat",
+        ["x", "y", "mean"],
+        heatmap_pgfplots_rows,
+    )
+
+    # ------------------------------------------------------------
+    # Export standard deviation in the same PGFPlots format
+    # ------------------------------------------------------------
+
+    heatmap_std_rows = []
+
+    for i in range(len(THRESHOLDS)):
+
+        for j in range(len(AUDIT_PROBABILITIES)):
+
+            heatmap_std_rows.append(
+                (
+                    j,
+                    i,
+                    std_matrix[i, j],
+                )
+            )
+
+    write_dat(
+        "figure7_heatmap_std.dat",
+        ["x", "y", "std"],
+        heatmap_std_rows,
+    )
+
+    # ------------------------------------------------------------
+    # Keep the original wide matrix export as well
+    # ------------------------------------------------------------
+
+    write_dat(
+        "figure7_p_tau_interaction_matrix.dat",
+        ["tau"] + [
+            f"p{str(p).replace('.', '_')}"
+            for p in AUDIT_PROBABILITIES
+        ],
+        [
+            (
+                threshold,
+                *[
+                    mean_matrix[i, j]
+                    for j in range(
+                        len(AUDIT_PROBABILITIES)
+                    )
+                ],
+            )
+            for i, threshold in enumerate(THRESHOLDS)
+        ],
+    )
+
+    # ------------------------------------------------------------
+    # Export standard deviation matrix
+    # ------------------------------------------------------------
+
+    write_dat(
+        "figure7_p_tau_interaction_std_matrix.dat",
+        ["tau"] + [
+            f"p{str(p).replace('.', '_')}"
+            for p in AUDIT_PROBABILITIES
+        ],
+        [
+            (
+                threshold,
+                *[
+                    std_matrix[i, j]
+                    for j in range(
+                        len(AUDIT_PROBABILITIES)
+                    )
+                ],
+            )
+            for i, threshold in enumerate(THRESHOLDS)
+        ],
+    )
+
+    # ------------------------------------------------------------
+    # Original Python heatmap
+    # ------------------------------------------------------------
+
+    fig, ax = plt.subplots(
+        figsize=(8.0, 5.5)
+    )
+
+    image = ax.imshow(
+        mean_matrix,
+        aspect="auto",
+        origin="lower",
+    )
+
+    ax.set_xticks(
+        np.arange(
+            len(AUDIT_PROBABILITIES)
+        )
+    )
+
+    ax.set_xticklabels(
+        [
+            str(p)
+            for p in AUDIT_PROBABILITIES
+        ]
+    )
+
+    ax.set_yticks(
+        np.arange(
+            len(THRESHOLDS)
+        )
+    )
+
+    ax.set_yticklabels(
+        [
+            str(t)
+            for t in THRESHOLDS
+        ]
+    )
+
+    ax.set_xlabel(
+        "Random audit probability $p$"
+    )
+
+    ax.set_ylabel(
+        r"Outlier detection threshold $\tau$"
+    )
+
+    ax.set_title(
+        "Figure 7: Interaction between outlier detection "
+        "and probabilistic auditing (RQ3)"
+    )
+
+    # ------------------------------------------------------------
+    # Numerical values inside heatmap
+    # ------------------------------------------------------------
+
+    for i in range(
+        len(THRESHOLDS)
+    ):
+
+        for j in range(
+            len(AUDIT_PROBABILITIES)
+        ):
+
+            ax.text(
+                j,
+                i,
+                f"{mean_matrix[i, j]:.3f}",
+                ha="center",
+                va="center",
+                fontsize=8.5,
+            )
+
+    # ------------------------------------------------------------
+    # Colorbar
+    # ------------------------------------------------------------
+
+    colorbar = fig.colorbar(
+        image,
+        ax=ax,
+    )
+
+    colorbar.set_label(
+        r"Mean final attacker contribution "
+        r"$\phi_i^{(T)}(i)$"
+    )
+
+    ax.grid(False)
+
+    fig.tight_layout()
+
+    save_figure(
+        fig,
+        "figure7_p_tau_interaction",
     )
 
 # ================================================================
@@ -1328,6 +1704,8 @@ def main():
     plot_combined_defense(results)
 
     plot_byzantine_attack(results)
+
+    plot_p_tau_interaction(results)
 
     print("\n" + "=" * 70)
     print("All figures generated.")
